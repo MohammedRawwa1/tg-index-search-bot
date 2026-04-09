@@ -2516,7 +2516,11 @@ async def public_page(request: Request, page_id: str):
                 try:
                     coll = db.get_collection("files")
                     video_exts = "mp4|mkv|webm|mov|avi|flv|m4v|ts|mpeg|mpg"
-                    pattern = re.compile(r'(.+?(?:\.(?:' + video_exts + r')))\s*$', re.I)
+                    # Match the last filename-like token ending with a known video extension.
+                    # - Use greedy matching so we capture the final extension on the line.
+                    # - Allow and ignore common trailing punctuation (])}).,;:"')
+                    # - Use Unicode flag for broad character support.
+                    pattern = re.compile(r'(.+\.(?:' + video_exts + r'))(?:[\)\]\}\.,;:\"\']*)\s*$', re.I | re.U)
                     try:
                         from app.utils.helpers import unescape_for_plain_text
                     except Exception:
@@ -2757,7 +2761,9 @@ async def public_page(request: Request, page_id: str):
                                 enriched_lines.append(html.escape(ln))
                                 continue
                             ln_un = unescape_for_plain_text(ln or "")
-                            m = pattern.search(ln_un)
+                            # Remove common list prefixes like '1) ', '1. ', '- ', '* ', '• '
+                            ln_clean = re.sub(r'^\s*(?:\d+[\)\.]\s*|[-\*\u2022]\s*)', '', ln_un)
+                            m = pattern.search(ln_clean)
                             if m:
                                 filename = m.group(1).strip()
                                 doc = await _find_best_file_doc(filename)
