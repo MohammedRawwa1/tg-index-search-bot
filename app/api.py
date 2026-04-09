@@ -2751,10 +2751,6 @@ async def public_page(request: Request, page_id: str):
                             return None
                         return None
 
-                        except Exception:
-                            return None
-                        return None
-
                     for ln in md_lines:
                         try:
                             if resolved >= MAX_RESOLVE:
