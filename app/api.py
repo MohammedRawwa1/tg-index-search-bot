@@ -2640,17 +2640,31 @@ async def public_page(request: Request, page_id: str):
                                 try:
                                     fb_fname = fallback.get("filename") or ""
                                     fb_norm = normalize_filename_key(fb_fname)
+
+                                    # Prefer accepting video file fallbacks (mp4/etc.)
+                                    try:
+                                        file_ext = (filename.rsplit('.', 1)[1] or "").lower() if '.' in filename else ""
+                                    except Exception:
+                                        file_ext = ""
+                                    video_exts_set = {"mp4", "mkv", "webm", "mov", "avi", "flv", "m4v", "ts", "mpeg", "mpg"}
+                                    if file_ext in video_exts_set:
+                                        # For video files (especially .mp4) be permissive and accept the fallback candidate
+                                        return fallback
+
                                     if not fname_norm_input:
                                         return fallback
-                                    # quick containment checks
+
+                                    # quick containment checks (unchanged)
                                     if fb_norm == fname_norm_input or fb_norm in fname_norm_input or fname_norm_input in fb_norm:
                                         return fallback
-                                    # token overlap ratio
+
+                                    # Lower the required token-overlap so fuzzy matches are accepted
                                     in_tokens = set(t for t in fname_norm_input.split() if t)
                                     fb_tokens = set(t for t in fb_norm.split() if t)
                                     if in_tokens and fb_tokens:
                                         overlap = len(in_tokens & fb_tokens) / float(len(in_tokens | fb_tokens))
-                                        if overlap >= 0.5:
+                                        # lowered from 0.5 to 0.25 to reduce strictness
+                                        if overlap >= 0.25:
                                             return fallback
                                 except Exception:
                                     pass
@@ -3156,21 +3170,28 @@ async def api_search(
 
     # Support markdown output for easy export/pasting into chats
     if str(output_format).lower() in ("md", "markdown"):
-        def is_mp4_doc(doc: dict) -> bool:
+        def is_video_doc(doc: dict) -> bool:
+            """Return True for video-like documents (.mp4/.mov/.webm etc.)."""
             mime = (doc.get("mime") or doc.get("content_type") or "").lower()
             fname = (doc.get("filename") or doc.get("file_name") or "").lower()
-            if mime and ("mp4" in mime or mime.startswith("video/")):
+            # Accept based on MIME when available (video/*) or known extensions
+            if mime and ("video/" in mime or "mp4" in mime):
                 return True
-            if fname.endswith(".mp4"):
-                return True
+            try:
+                # check common video extensions
+                for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi", ".flv", ".m4v", ".ts", ".mpeg", ".mpg"):
+                    if fname.endswith(ext):
+                        return True
+            except Exception:
+                pass
             return False
 
         md_lines = []
-        mp4_results = [r for r in page_results if is_mp4_doc(r)]
-        if not mp4_results:
-            md_text = "_No MP4 files in results._"
+        video_results = [r for r in page_results if is_video_doc(r)]
+        if not video_results:
+            md_text = "_No video files in results._"
         else:
-            for r in mp4_results:
+            for r in video_results:
                 fname = r.get("filename") or r.get("file_name") or "-"
                 display = str(fname).replace("\n", " ").strip()
                 url = ""
