@@ -2558,28 +2558,36 @@ async def public_page(request: Request, page_id: str):
                             except Exception:
                                 fname_norm_input = ""
 
-                            fallback = None
+                            # Aggregate candidate lists from various strategies then score
+                            candidates = []
 
-                            def _candidate_norm_eq(doc):
+                            def _add_candidates(res_list):
                                 try:
-                                    fn = doc.get("filename") or ""
-                                    return normalize_filename_key(fn) == fname_norm_input
+                                    for c in (res_list or []):
+                                        # avoid duplicates by chat_id/message_id
+                                        key = (int(c.get("chat_id") or 0), int(c.get("message_id") or 0))
+                                        if key not in seen_keys:
+                                            seen_keys.add(key)
+                                            candidates.append(c)
                                 except Exception:
-                                    return False
+                                    pass
 
-                            # helper to record fallback candidate
-                            def _record_fallback(res_list):
-                                nonlocal fallback
-                                if not fallback and res_list:
-                                    fallback = res_list[0]
+                            seen_keys = set()
 
                             # 1) exact (case-insensitive)
-                            q = {"filename": {"$regex": f'^{re.escape(filename)}$', "$options": "i"}}
-                            res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
-                            for cand in res:
-                                if _candidate_norm_eq(cand):
-                                    return cand
-                            _record_fallback(res)
+                            try:
+                                q = {"filename": {"$regex": f'^{re.escape(filename)}$', "$options": "i"}}
+                                res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
+                                # if any exact normalized match, return immediately
+                                for cand in res:
+                                    try:
+                                        if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                            return cand
+                                    except Exception:
+                                        pass
+                                _add_candidates(res)
+                            except Exception:
+                                pass
 
                             # 2) URL-decoded exact
                             try:
@@ -2587,21 +2595,33 @@ async def public_page(request: Request, page_id: str):
                             except Exception:
                                 filename_unq = filename
                             if filename_unq and filename_unq != filename:
-                                q = {"filename": {"$regex": f'^{re.escape(filename_unq)}$', "$options": "i"}}
-                                res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
-                                for cand in res:
-                                    if _candidate_norm_eq(cand):
-                                        return cand
-                                _record_fallback(res)
+                                try:
+                                    q = {"filename": {"$regex": f'^{re.escape(filename_unq)}$', "$options": "i"}}
+                                    res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
+                                    for cand in res:
+                                        try:
+                                            if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                                return cand
+                                        except Exception:
+                                            pass
+                                    _add_candidates(res)
+                                except Exception:
+                                    pass
 
                             # 3) suffix match (prefer most recent)
-                            short = filename[-60:]
-                            q = {"filename": {"$regex": re.escape(short) + r'$', "$options": "i"}}
-                            res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
-                            for cand in res:
-                                if _candidate_norm_eq(cand):
-                                    return cand
-                            _record_fallback(res)
+                            try:
+                                short = filename[-60:]
+                                q = {"filename": {"$regex": re.escape(short) + r'$', "$options": "i"}}
+                                res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
+                                for cand in res:
+                                    try:
+                                        if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                            return cand
+                                    except Exception:
+                                        pass
+                                _add_candidates(res)
+                            except Exception:
+                                pass
 
                             # 4) fuzzy token-ordered match
                             try:
@@ -2613,9 +2633,12 @@ async def public_page(request: Request, page_id: str):
                                     q = {"filename": {"$regex": fuzzy_pattern, "$options": "i"}}
                                     res = await coll.find(q, proj).sort(sort_order).to_list(length=50)
                                     for cand in res:
-                                        if _candidate_norm_eq(cand):
-                                            return cand
-                                    _record_fallback(res)
+                                        try:
+                                            if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                                return cand
+                                        except Exception:
+                                            pass
+                                    _add_candidates(res)
                             except Exception:
                                 pass
 
@@ -2627,47 +2650,106 @@ async def public_page(request: Request, page_id: str):
                                         q = {"filename": {"$regex": re.escape(tok), "$options": "i"}}
                                         res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
                                         for cand in res:
-                                            if _candidate_norm_eq(cand):
-                                                return cand
-                                        _record_fallback(res)
+                                            try:
+                                                if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                                    return cand
+                                            except Exception:
+                                                pass
+                                        _add_candidates(res)
                                     except Exception:
                                         continue
                             except Exception:
                                 pass
 
-                            # Conservative acceptance of fallback: require some normalized-token overlap
-                            if fallback is not None:
+                            # If no candidates collected, nothing to do
+                            if not candidates:
+                                return None
+
+                            # If filename seems like a video, prefer the most recent candidate
+                            try:
+                                file_ext = (filename.rsplit('.', 1)[1] or "").lower() if '.' in filename else ""
+                            except Exception:
+                                file_ext = ""
+                            video_exts_set = {"mp4", "mkv", "webm", "mov", "avi", "flv", "m4v", "ts", "mpeg", "mpg"}
+                            if file_ext in video_exts_set and candidates:
+                                # prefer newest candidate (already sorted by timestamp desc)
+                                return candidates[0]
+
+                            # Score remaining candidates by multiple heuristics
+                            best = None
+                            best_score = 0.0
+                            try:
+                                # precompute input trigrams/tokens
                                 try:
-                                    fb_fname = fallback.get("filename") or ""
-                                    fb_norm = normalize_filename_key(fb_fname)
-
-                                    # Prefer accepting video file fallbacks (mp4/etc.)
-                                    try:
-                                        file_ext = (filename.rsplit('.', 1)[1] or "").lower() if '.' in filename else ""
-                                    except Exception:
-                                        file_ext = ""
-                                    video_exts_set = {"mp4", "mkv", "webm", "mov", "avi", "flv", "m4v", "ts", "mpeg", "mpg"}
-                                    if file_ext in video_exts_set:
-                                        # For video files (especially .mp4) be permissive and accept the fallback candidate
-                                        return fallback
-
-                                    if not fname_norm_input:
-                                        return fallback
-
-                                    # quick containment checks (unchanged)
-                                    if fb_norm == fname_norm_input or fb_norm in fname_norm_input or fname_norm_input in fb_norm:
-                                        return fallback
-
-                                    # Lower the required token-overlap so fuzzy matches are accepted
-                                    in_tokens = set(t for t in fname_norm_input.split() if t)
-                                    fb_tokens = set(t for t in fb_norm.split() if t)
-                                    if in_tokens and fb_tokens:
-                                        overlap = len(in_tokens & fb_tokens) / float(len(in_tokens | fb_tokens))
-                                        # lowered from 0.5 to 0.25 to reduce strictness
-                                        if overlap >= 0.25:
-                                            return fallback
+                                    fname_tris = make_trigrams((filename or "")[:200], TRIGRAM_MAX)
                                 except Exception:
-                                    pass
+                                    fname_tris = []
+                                in_tokens = set(t for t in fname_norm_input.split() if t)
+                                for cand in candidates:
+                                    try:
+                                        score = 0.0
+                                        cand_fname = (cand.get("filename") or "")
+                                        cand_norm = normalize_filename_key(cand_fname)
+                                        # normalized equality
+                                        if cand_norm and fname_norm_input and cand_norm == fname_norm_input:
+                                            score += 3.0
+                                        # suffix match
+                                        try:
+                                            if cand_fname and filename and cand_fname.lower().endswith(filename.lower()):
+                                                score += 1.5
+                                        except Exception:
+                                            pass
+                                        # token overlap
+                                        try:
+                                            cand_tokens = set(t for t in cand_norm.split() if t)
+                                            if in_tokens and cand_tokens:
+                                                overlap = len(in_tokens & cand_tokens) / float(len(in_tokens | cand_tokens))
+                                                score += overlap * 1.5
+                                        except Exception:
+                                            pass
+                                        # trigram similarity
+                                        try:
+                                            tri_sim = trigram_similarity(fname_tris, cand.get("trigrams", []) or [])
+                                            score += tri_sim * 1.5
+                                        except Exception:
+                                            pass
+                                        # recency boost
+                                        try:
+                                            ts = cand.get("timestamp")
+                                            ts_dt = None
+                                            if isinstance(ts, str):
+                                                try:
+                                                    ts_dt = datetime.fromisoformat(ts)
+                                                except Exception:
+                                                    ts_dt = None
+                                            elif isinstance(ts, datetime):
+                                                ts_dt = ts
+                                            if ts_dt:
+                                                age_seconds = (datetime.utcnow() - ts_dt).total_seconds()
+                                                window = 30 * 24 * 3600
+                                                recency = max(0.0, (window - age_seconds) / window)
+                                                score += recency * 0.5
+                                        except Exception:
+                                            pass
+
+                                        if score > best_score:
+                                            best_score = score
+                                            best = cand
+                                    except Exception:
+                                        continue
+                            except Exception:
+                                pass
+
+                            # Accept best candidate if it meets a conservative threshold
+                            try:
+                                if best and best_score >= 0.6:
+                                    return best
+                            except Exception:
+                                pass
+
+                        except Exception:
+                            return None
+                        return None
 
                         except Exception:
                             return None
