@@ -1,0 +1,43 @@
+services:
+  - type: "web"
+    name: "tg-file-index-web"
+    env: "python"
+    plan: "free"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app.api:app --host 0.0.0.0 --port $PORT"
+    # Health check for Render to consider the web service healthy
+    healthCheck:
+      path: "/health"
+      protocol: "http"
+      intervalSeconds: 10
+      timeoutSeconds: 5
+      unhealthyThreshold: 2
+      healthyThreshold: 1
+    # Environment variables (set values in Render dashboard; do NOT commit secrets)
+    envVars:
+      - key: "MONGO_URI"
+        value: ""
+      - key: "DB_NAME"
+        value: "tg_index"
+      - key: "LOG_LEVEL"
+        value: "INFO"
+  - type: "worker"
+    name: "tg-file-index-worker"
+    env: "python"
+    plan: "free"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python -m app.main"
+    # Worker env placeholders (set real values in Render dashboard)
+    envVars:
+      - key: "MONGO_URI"
+        value: ""
+      - key: "DB_NAME"
+        value: "tg_index"
+      - key: "BOT_TOKEN"
+        value: ""
+      - key: "API_ID"
+        value: ""
+      - key: "API_HASH"
+        value: ""
+      - key: "OWNER_ID"
+        value: ""
