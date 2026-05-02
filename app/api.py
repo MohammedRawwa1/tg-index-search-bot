@@ -21,6 +21,9 @@ import re
 from datetime import datetime, timedelta
 import uuid
 
+# Enable per-line enrichment debug logging when set (ENRICH_DEBUG=1|true|yes)
+ENRICH_DEBUG = os.getenv("ENRICH_DEBUG", "").lower() in ("1", "true", "yes")
+
 
 def _escape_markdown(text: str) -> str:
     """Escape Telegram Markdown v1 safely."""
@@ -171,6 +174,28 @@ async def startup():
         except Exception:
             logger.exception("Failed to create compound index on files collection")
             # best-effort: do not fail startup if index creation fails
+            pass
+        # Ensure indexes that speed up eager/normalized lookups
+        try:
+            try:
+                await app.state.db.get_collection("files").create_index([("filename_norm", 1)], background=True)
+                logger.info("Ensured index files(filename_norm)")
+            except Exception:
+                logger.exception("Failed to create index files(filename_norm)")
+            try:
+                # multikey index on trigrams array to accelerate trigram candidate queries
+                await app.state.db.get_collection("files").create_index([("trigrams", 1)], background=True)
+                logger.info("Ensured index files(trigrams)")
+            except Exception:
+                logger.exception("Failed to create index files(trigrams)")
+            try:
+                # text index on search_text used by $text queries
+                await app.state.db.get_collection("files").create_index([("search_text", "text")], background=True)
+                logger.info("Ensured text index files(search_text)")
+            except Exception:
+                logger.exception("Failed to create text index files(search_text)")
+        except Exception:
+            # ignore index creation errors (best-effort)
             pass
         # Initialize optional server-side search cache (in-memory + Mongo persistence)
         try:
@@ -2578,6 +2603,16 @@ async def public_page(request: Request, page_id: str):
 
                             seen_keys = set()
 
+                            # Fast path: lookup by normalized filename key (eager-indexed)
+                            if fname_norm_input:
+                                try:
+                                    res = await coll.find({"filename_norm": fname_norm_input}, proj).sort(sort_order).to_list(length=5)
+                                    if res:
+                                        # prefer newest match
+                                        return res[0]
+                                except Exception:
+                                    pass
+
                             # 1) exact (case-insensitive)
                             try:
                                 q = {"filename": {"$regex": f'^{re.escape(filename)}$', "$options": "i"}}
@@ -3125,23 +3160,95 @@ async def api_search(
             docs = []
 
     if not docs:
-        # fallback: local candidate selection using title tokens or trigrams
+        # Eager candidate selection: exact normalized filename -> token filters -> small fuzzy (trigrams)
         try:
             q_tris = make_trigrams(q or "", TRIGRAM_MAX)
-            if strict:
-                candidate_filter = {"title_tokens": {"$all": tokens}}
-            else:
-                candidate_filter = {"$or": [{"title_tokens": {"$in": tokens}}, {"trigrams": {"$in": q_tris}}]}
-            if thread_id is not None:
+            # helper to collect unique candidates preserving order
+            candidates = []
+            seen = set()
+            def _add(res_list):
                 try:
-                    tid = int(thread_id)
-                    candidate_filter = {"$and": [candidate_filter, {"message_thread_id": tid}]}
+                    for c in (res_list or []):
+                        try:
+                            key = (int(c.get("chat_id") or 0), int(c.get("message_id") or 0))
+                        except Exception:
+                            key = (0, 0)
+                        if key not in seen:
+                            seen.add(key)
+                            candidates.append(c)
                 except Exception:
                     pass
-            # increase candidate fetch size to improve search depth for large archives
-            docs = await coll.find(candidate_filter, projection).to_list(length=5000)
+
+            sort_order = [("timestamp", -1), ("message_id", -1)]
+            # attempt eager normalized filename lookup first
+            try:
+                from app.utils.helpers import normalize_filename_key
+                qnorm = normalize_filename_key(q or "")
+            except Exception:
+                qnorm = ""
+
+            if qnorm:
+                try:
+                    qn = {"filename_norm": qnorm}
+                    if thread_id is not None:
+                        try:
+                            qn["message_thread_id"] = int(thread_id)
+                        except Exception:
+                            pass
+                    res = await coll.find(qn, projection).sort(sort_order).to_list(length=50)
+                    _add(res)
+                except Exception:
+                    pass
+
+            # token filters: strict/all then any
+            try:
+                if tokens:
+                    q_all = {"title_tokens": {"$all": tokens}}
+                    if thread_id is not None:
+                        try:
+                            q_all = {"$and": [q_all, {"message_thread_id": int(thread_id)}]}
+                        except Exception:
+                            pass
+                    res_all = await coll.find(q_all, projection).sort(sort_order).to_list(length=500)
+                    _add(res_all)
+            except Exception:
+                pass
+
+            if not candidates:
+                try:
+                    if tokens:
+                        q_any = {"title_tokens": {"$in": tokens}}
+                        if thread_id is not None:
+                            try:
+                                q_any = {"$and": [q_any, {"message_thread_id": int(thread_id)}]}
+                            except Exception:
+                                pass
+                        res_any = await coll.find(q_any, projection).sort(sort_order).to_list(length=2000)
+                        _add(res_any)
+                except Exception:
+                    pass
+
+            # small fuzzy/trigram fallback
+            if not candidates:
+                try:
+                    q_tri = {"trigrams": {"$in": q_tris}} if q_tris else {}
+                    if thread_id is not None:
+                        try:
+                            if q_tri:
+                                q_tri = {"$and": [q_tri, {"message_thread_id": int(thread_id)}]}
+                            else:
+                                q_tri = {"message_thread_id": int(thread_id)}
+                        except Exception:
+                            pass
+                    if q_tri:
+                        res_tri = await coll.find(q_tri, projection).sort(sort_order).to_list(length=5000)
+                        _add(res_tri)
+                except Exception:
+                    pass
+
+            docs = candidates
         except Exception as exc:
-            logger.exception("api_search: DB candidate query failed: {}", exc)
+            logger.exception("api_search: eager DB candidate query failed: {}", exc)
             docs = []
 
     # If no candidate results, try MongoDB text search on `search_text` field
