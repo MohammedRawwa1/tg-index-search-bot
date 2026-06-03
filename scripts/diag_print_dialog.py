@@ -8,6 +8,13 @@ async def main():
     session_name = os.getenv("SESSION_NAME") or "user_session"
     # Accept TELETHON_SESSION as alias for SESSION_STRING
     session_string = os.getenv("SESSION_STRING") or os.getenv("TELETHON_SESSION")
+
+    # Ensure local .session files are created in the project root (not the current CWD).
+    session_path_env = os.getenv("SESSION_PATH")
+    if session_path_env:
+        session_target = session_path_env
+    else:
+        session_target = str(_ROOT / session_name)
     # Accept TELETHON_* env names as aliases for API credentials
     api_id = os.getenv("API_ID") or os.getenv("TELETHON_API_ID")
     api_hash = os.getenv("API_HASH") or os.getenv("TELETHON_API_HASH")
@@ -21,9 +28,9 @@ async def main():
         kwargs["api_hash"] = api_hash
 
     if session_string:
-        client = Client(session_name, session_string=session_string, **kwargs)
+        client = Client(session_target, session_string=session_string, **kwargs)
     else:
-        client = Client(session_name, **kwargs)
+        client = Client(session_target, **kwargs)
 
     await client.start()
     try:

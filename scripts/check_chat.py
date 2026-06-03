@@ -14,6 +14,14 @@ async def main():
     # Accept TELETHON_SESSION as an alternate env name for exported session strings
     session_string = os.getenv("SESSION_STRING") or os.getenv("TELETHON_SESSION")
 
+    # Ensure local .session files are created in the project root (not the current CWD).
+    # You can override with SESSION_PATH env var to provide an explicit path.
+    session_path_env = os.getenv("SESSION_PATH")
+    if session_path_env:
+        session_target = session_path_env
+    else:
+        session_target = str(_ROOT / session_name)
+
     # Optional: allow passing API credentials via env to ensure client can start
     # Accept TELETHON_* env names as aliases for API credentials
     api_id = os.getenv("API_ID") or os.getenv("TELETHON_API_ID")
@@ -29,9 +37,9 @@ async def main():
 
     # Prefer SESSION_STRING to avoid creating/locking a local SQLite session file
     if session_string:
-        c = Client(session_name, session_string=session_string, **kwargs)
+        c = Client(session_target, session_string=session_string, **kwargs)
     else:
-        c = Client(session_name, **kwargs)
+        c = Client(session_target, **kwargs)
 
     try:
         await c.start()
@@ -54,7 +62,17 @@ async def main():
         if session_string:
             print("You provided a SESSION_STRING, but the client failed when loading session data in memory. This may indicate an incompatible Pyrogram version or malformed session string.")
         else:
-            session_file = (_ROOT / f"{session_name}.session") if '_ROOT' in globals() else None
+            # Determine the .session file path based on the resolved target we used
+            try:
+                st = session_target
+            except NameError:
+                st = None
+            session_file = None
+            if st:
+                p = pathlib.Path(st)
+                if not str(p).endswith('.session'):
+                    p = p.with_suffix('.session')
+                session_file = p
             if session_file and session_file.exists():
                 print(f"Detected session file: {session_file}")
                 print("Recommendations:")
