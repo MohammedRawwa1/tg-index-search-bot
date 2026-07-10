@@ -752,11 +752,17 @@ async def telegram_webhook(token: str, update: dict):
         return {"ok": True}
 
     if cmd == "/help":
-        help_text = "Commands:\n/search <query> — Search files\n/stats — Indexed file counts\n/reindex <chat_id> — Backfill chat history\n/health — DB health"
+        help_text = "Commands:\n/search <query> — Search files"
         await _send_tg(token, chat_id, help_text)
         return {"ok": True}
 
     if cmd == "/stats":
+        # Bot owner only
+        from_user_id = (message.get("from") or {}).get("id")
+        owner = settings.BOT_OWNER or settings.OWNER_ID
+        if owner is not None and from_user_id != int(owner):
+            await _send_tg(token, chat_id, "Unauthorized")
+            return {"ok": True}
         db = getattr(app.state, "db", None)
         if db is None:
             await _send_tg(token, chat_id, "Stats: DB unavailable")
@@ -771,6 +777,12 @@ async def telegram_webhook(token: str, update: dict):
         return {"ok": True}
 
     if cmd == "/health":
+        # Bot owner only
+        from_user_id = (message.get("from") or {}).get("id")
+        owner = settings.BOT_OWNER or settings.OWNER_ID
+        if owner is not None and from_user_id != int(owner):
+            await _send_tg(token, chat_id, "Unauthorized")
+            return {"ok": True}
         mongo_client = getattr(app.state, "mongo_client", None)
         db = getattr(app.state, "db", None)
         if mongo_client is None or db is None:
@@ -785,6 +797,12 @@ async def telegram_webhook(token: str, update: dict):
         return {"ok": True}
 
     if cmd == "/reindex":
+        # Bot owner only
+        from_user_id = (message.get("from") or {}).get("id")
+        owner = settings.BOT_OWNER or settings.OWNER_ID
+        if owner is not None and from_user_id != int(owner):
+            await _send_tg(token, chat_id, "Unauthorized")
+            return {"ok": True}
         # /reindex <chat_id> optionally. We'll spawn scripts/backfill.py as a subprocess
         parts = text.split(maxsplit=1)
         if len(parts) < 2:

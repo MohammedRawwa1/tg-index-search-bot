@@ -45,6 +45,7 @@ class Settings:
     TARGET_CHAT_ID: Optional[int]
     LOG_LEVEL: str
     OWNER_ID: Optional[int]
+    BOT_OWNER: Optional[int]
     SEARCH_COOLDOWN: int
     MAX_QUERY_LEN: int
     DELETE_COMMANDS: bool
@@ -76,6 +77,7 @@ settings = Settings(
     MONGO_CONNECT_TIMEOUT_MS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "10000")),
     LOG_LEVEL=os.getenv("LOG_LEVEL", "INFO"),
     OWNER_ID=int(os.getenv("OWNER_ID")) if os.getenv("OWNER_ID") else None,
+    BOT_OWNER=int(os.getenv("BOT_OWNER")) if os.getenv("BOT_OWNER") else None,
     SEARCH_COOLDOWN=int(os.getenv("SEARCH_COOLDOWN", "3")),
     MAX_QUERY_LEN=int(os.getenv("MAX_QUERY_LEN", "64")),
     DELETE_COMMANDS=(os.getenv("DELETE_COMMANDS", "false").lower() in ("1", "true", "yes")),
