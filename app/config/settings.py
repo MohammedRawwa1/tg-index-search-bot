@@ -63,21 +63,25 @@ class Settings:
     MAX_MSG: int
     # Maximum number of link lines to include per page before hiding extras behind navigation
     MAX_LINKS_PER_PAGE: int
+    # Public URL for webhook self-registration (set to e.g. https://your-service.onrender.com)
+    PUBLIC_URL: Optional[str]
 
 
 _api_creds = _parse_api_credentials()
+# Support BOT_OWNER (preferred) or legacy OWNER_ID env var
+_owner_env = os.getenv("BOT_OWNER") or os.getenv("OWNER_ID") or os.getenv("owner_id")
 
 settings = Settings(
     API_CREDENTIALS=_api_creds,
     # Accept either MONGO_URI or MONGODB_URL (common env name in user .env)
     MONGO_URI=os.getenv("MONGO_URI", os.getenv("MONGODB_URL", "mongodb://localhost:27017/tg_index")),
-    DB_NAME=os.getenv("DB_NAME", "tg_index"),
+    DB_NAME=os.getenv("DB_NAME", os.getenv("MONGODB_NAME", os.getenv("MONGO_DB_NAME", "tg_index"))),
     TARGET_CHAT_ID=int(os.getenv("TARGET_CHAT_ID", "0")) if os.getenv("TARGET_CHAT_ID") else None,
     # Mongo connection timeout in milliseconds for server selection/ping
     MONGO_CONNECT_TIMEOUT_MS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "10000")),
     LOG_LEVEL=os.getenv("LOG_LEVEL", "INFO"),
-    OWNER_ID=int(os.getenv("OWNER_ID")) if os.getenv("OWNER_ID") else None,
-    BOT_OWNER=int(os.getenv("BOT_OWNER")) if os.getenv("BOT_OWNER") else None,
+    OWNER_ID=int(_owner_env) if _owner_env else None,
+    BOT_OWNER=int(_owner_env) if _owner_env else None,
     SEARCH_COOLDOWN=int(os.getenv("SEARCH_COOLDOWN", "3")),
     MAX_QUERY_LEN=int(os.getenv("MAX_QUERY_LEN", "64")),
     DELETE_COMMANDS=(os.getenv("DELETE_COMMANDS", "false").lower() in ("1", "true", "yes")),
@@ -98,4 +102,7 @@ settings = Settings(
     MAX_MSG=int(os.getenv("MAX_MSG", "4000")),
     # Max number of link lines to display per page before requiring navigation
     MAX_LINKS_PER_PAGE=int(os.getenv("MAX_LINKS_PER_PAGE", "100")),
+    # Public base URL for webhook self-registration (e.g. https://my-service.onrender.com)
+    # Falls back to RENDER_EXTERNAL_URL (auto-set by Render) or custom PUBLIC_URL env var
+    PUBLIC_URL=os.getenv("PUBLIC_URL", os.getenv("RENDER_EXTERNAL_URL", None)),
 )

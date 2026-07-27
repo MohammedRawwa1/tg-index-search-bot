@@ -17,6 +17,7 @@ from typing import Optional
 import pathlib
 import sqlite3
 import struct
+import traceback
 
 # Ensure project root is on sys.path so `import app` works when running
 # this script directly from the `scripts/` directory.
@@ -26,6 +27,15 @@ if str(_ROOT) not in sys.path:
 
 import httpx
 from pyrogram import Client
+
+# AuthKeyUnregistered can appear in different pyrogram versions; try imports defensively
+try:
+    from pyrogram.errors import AuthKeyUnregistered
+except Exception:
+    try:
+        from pyrogram.errors.exceptions.unauthorized_401 import AuthKeyUnregistered
+    except Exception:
+        AuthKeyUnregistered = None
 
 from app.config.settings import settings
 from app.services.mongo import MongoService
@@ -294,7 +304,38 @@ async def _run(target_chat_id: Optional[int] = None):
                 print("No local session file detected; verify your SESSION_STRING or API_ID/API_HASH.")
             traceback.print_exc()
             return
-    except Exception:
+    except Exception as exc:
+        # Handle invalid/expired Pyrogram session keys (AuthKeyUnregistered) with a clearer message.
+        is_auth_key_issue = False
+        try:
+            if AuthKeyUnregistered and isinstance(exc, AuthKeyUnregistered):
+                is_auth_key_issue = True
+        except Exception:
+            pass
+        if not is_auth_key_issue:
+            # fallback: inspect exception name/message for known patterns
+            name = type(exc).__name__
+            if "AuthKeyUnregistered" in name or "AUTH_KEY_UNREGISTERED" in str(exc):
+                is_auth_key_issue = True
+
+        if is_auth_key_issue:
+            print("ERROR: Telegram session/auth key is unregistered or invalid.")
+            print("This usually means your session string or .session file is expired, revoked, or incompatible.")
+            project_root = pathlib.Path(__file__).resolve().parents[1]
+            session_name = os.getenv("SESSION_NAME") or "backfill_user"
+            session_file = project_root / f"{session_name}.session"
+            if session_file.exists():
+                print(f"Detected local session file: {session_file}")
+                print("Recommendation: backup and remove this .session file, then run:")
+                print("  python scripts/create_user_session.py")
+                print("Follow the prompts to re-login, or run with --export to get SESSION_STRING for remote deployments.")
+            else:
+                print("No local .session file detected; if you use SESSION_STRING, ensure it's a fresh exported session.")
+                print("To create/export a session string locally, run:")
+                print("  python scripts/create_user_session.py --export")
+                print("Then set SESSION_STRING in your environment and re-run the backfill.")
+            return
+
         # Unexpected top-level exception; print traceback for debugging.
         traceback.print_exc()
 

@@ -1,4 +1,5 @@
 """Indexer handlers for live and history indexing."""
+import os
 from pyrogram import Client
 from pyrogram.types import Message
 
@@ -16,9 +17,23 @@ def register_indexer(client: Client, mongo):
 
     file_index = FileIndex(mongo.db)
     limiter = RateLimiter()
+    # Config: allow indexing based on env, default to video-oriented
+    skip_sender_chat = os.getenv("SKIP_SENDER_CHAT", "true").lower() in ("1", "true", "yes")
 
     @client.on_message()
     async def _on_message(client: Client, message: Message):
+        # Skip messages from bots
+        try:
+            if getattr(message, "from_user", None) and getattr(message.from_user, "is_bot", False):
+                return
+        except Exception:
+            pass
+        # Optionally skip posts from sender_chat (channel posts)
+        try:
+            if skip_sender_chat and getattr(message, "sender_chat", None):
+                return
+        except Exception:
+            pass
         # Minimal example: prefer video then document and extract file_name
         media = None
         if getattr(message, "video", None):
@@ -79,6 +94,18 @@ def register_indexer(client: Client, mongo):
 
     @client.on_edited_message()
     async def _on_edit(client: Client, message: Message):
+        # Skip edits from bots
+        try:
+            if getattr(message, "from_user", None) and getattr(message.from_user, "is_bot", False):
+                return
+        except Exception:
+            pass
+        # Optionally skip edits from sender_chat (channel posts)
+        try:
+            if skip_sender_chat and getattr(message, "sender_chat", None):
+                return
+        except Exception:
+            pass
         # Re-index edited messages (captions changed or file replaced)
         media = None
         if getattr(message, "video", None):
@@ -200,6 +227,12 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
                 )
                 return
 
+    # honor SKIP_SENDER_CHAT for backfill selection (defined early to filter during fetch)
+    try:
+        skip_sender_chat = os.getenv("SKIP_SENDER_CHAT", "true").lower() in ("1", "true", "yes")
+    except Exception:
+        skip_sender_chat = True
+
     try:
         # helper to inspect raw message dict for reply_to_top_id (Telethon/raw cases)
         def _find_reply_top_id(obj):
@@ -244,6 +277,12 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
                         mt = mt
                 if mt != thread_id:
                     continue
+            # skip sender_chat/channel posts early to avoid wasting memory
+            try:
+                if skip_sender_chat and getattr(msg, "sender_chat", None):
+                    continue
+            except Exception:
+                pass
             pending.append(msg)
     except Exception:
         # If resolving the normalized peer id fails (fresh session/storage),
@@ -271,6 +310,12 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
                             mt = mt
                     if mt != thread_id:
                         continue
+                # skip sender_chat/channel posts early to avoid wasting memory
+                try:
+                    if skip_sender_chat and getattr(msg, "sender_chat", None):
+                        continue
+                except Exception:
+                    pass
                 pending.append(msg)
         except Exception:
             from app.utils.logger import logger
@@ -284,6 +329,8 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
         "indexed": 0,
         "skipped_no_media": 0,
         "skipped_no_filename": 0,
+        "skipped_bot": 0,
+        "skipped_sender_chat": 0,
     }
 
     batch = []
@@ -360,6 +407,20 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
         stats["scanned"] += 1
         msg_id = getattr(msg, "message_id", getattr(msg, "id", None))
         chat_id_val = getattr(msg.chat, "id", None) if getattr(msg, "chat", None) else None
+        # Skip messages from bots so we don't index chatbot media
+        try:
+            if getattr(msg, "from_user", None) and getattr(msg.from_user, "is_bot", False):
+                stats["skipped_bot"] += 1
+                continue
+        except Exception:
+            pass
+        # Optionally skip sender_chat/channel posts
+        try:
+            if skip_sender_chat and getattr(msg, "sender_chat", None):
+                stats["skipped_sender_chat"] += 1
+                continue
+        except Exception:
+            pass
         media = msg.video if getattr(msg, "video", None) else getattr(msg, "document", None)
         if not media:
             stats["skipped_no_media"] += 1
@@ -423,12 +484,16 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
 
     from app.utils.logger import logger
     logger.info(
-        "Backfill complete for {}: scanned={} indexed={} skipped_no_media={} skipped_no_filename={}",
+        "Backfill complete for {}: scanned={} indexed={} skipped_no_media={} skipped_no_filename={} "
+        "skipped_bot={} skipped_sender_chat={} skipped_non_video={}",
         target_chat_id,
         stats["scanned"],
         stats["indexed"],
         stats["skipped_no_media"],
         stats["skipped_no_filename"],
+        stats.get("skipped_bot", 0),
+        stats.get("skipped_sender_chat", 0),
+        stats.get("skipped_non_video", 0),
     )
 
     # Invalidate server-side search cache (if present) after a backfill/reindex

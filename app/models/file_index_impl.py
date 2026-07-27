@@ -43,6 +43,32 @@ class FileIndex:
         except Exception:
             self.CANDIDATE_LIMIT = CANDIDATE_LIMIT
 
+    def _normalize_filename(self, filename: str) -> str:
+        """Return a normalized filename string used for deduplication/search.
+
+        Normalization steps:
+        - Lowercase
+        - Strip extension
+        - Replace common separators and non-alnum with single spaces
+        - Collapse multiple spaces
+        """
+        if not filename:
+            return ""
+        try:
+            s = str(filename).lower()
+        except Exception:
+            s = filename or ""
+        # remove trailing extension
+        if "." in s:
+            s = s.rsplit(".", 1)[0]
+        # replace underscores/dashes/dots with spaces
+        s = re.sub(r"[_\-.–—]", " ", s)
+        # remove any remaining non-alnum characters to spaces
+        s = re.sub(r"[^a-z0-9]+", " ", s)
+        s = s.strip()
+        s = re.sub(r"\s+", " ", s)
+        return s
+
     async def upsert_file(
         self,
         chat_id: int,
@@ -80,6 +106,17 @@ class FileIndex:
         search_text = " ".join([str(x).lower() for x in search_parts if x])
         trigrams = make_trigrams(search_text or "", TRIGRAM_MAX)
 
+        # normalized filename used for deduplication and consistent grouping
+        # prefer token-based normalized title when available (removes copy suffixes)
+        try:
+            title_tokens = token_struct.get("title_tokens", []) if token_struct else []
+            if title_tokens:
+                norm_filename = " ".join([t.lower() for t in title_tokens if t])
+            else:
+                norm_filename = self._normalize_filename(filename)
+        except Exception:
+            norm_filename = self._normalize_filename(filename)
+
         doc: Dict[str, Any] = {
             "chat_id": int(chat_id),
             "message_id": int(message_id),
@@ -104,6 +141,7 @@ class FileIndex:
             "path": path,
             "thumbnail": thumbnail,
             "added_by": int(added_by) if added_by is not None else None,
+            "norm_filename": norm_filename,
         }
 
         # Upsert
@@ -119,13 +157,13 @@ class FileIndex:
 
         # mark duplicates (same chat_id + filename but different message_id)
         try:
-            dup = self._coll.find_one(
-                {
-                    "chat_id": doc["chat_id"],
-                    "filename": filename,
-                    "message_id": {"$ne": doc["message_id"]},
-                }
-            )
+            # mark duplicates using normalized filename / title tokens for more robust matching
+            dup_query = {"chat_id": doc["chat_id"], "message_id": {"$ne": doc["message_id"]}}
+            if norm_filename:
+                dup_query["norm_filename"] = norm_filename
+            else:
+                dup_query["filename"] = filename
+            dup = self._coll.find_one(dup_query)
             if dup:
                 self._coll.update_one(
                     {"chat_id": doc["chat_id"], "message_id": doc["message_id"]},
@@ -389,9 +427,11 @@ class FileIndex:
             for doc in results:
                 key = None
                 try:
-                    fname = (doc.get("filename") or "").strip().lower()
-                    if fname:
-                        key = fname
+                    # prefer normalized filename if present; fall back to computed norm
+                    norm = doc.get("norm_filename") or self._normalize_filename(doc.get("filename") or "")
+                    norm = (norm or "").strip().lower()
+                    if norm:
+                        key = norm
                     else:
                         # fallback to file id or chat+message
                         key = f"{doc.get('file_id') or ''}:{doc.get('chat_id')}:{doc.get('message_id')}"
@@ -448,6 +488,15 @@ class FileIndex:
                     doc["trigrams"] = make_trigrams(doc.get("search_text", "") or doc.get("filename", ""), TRIGRAM_MAX)
                 except Exception:
                     doc["trigrams"] = []
+            # ensure normalized filename is present for bulk docs
+            if "norm_filename" not in doc:
+                try:
+                    if doc.get("title_tokens"):
+                        doc["norm_filename"] = " ".join([t.lower() for t in doc.get("title_tokens") if t])
+                    else:
+                        doc["norm_filename"] = self._normalize_filename(doc.get("filename") or "")
+                except Exception:
+                    doc["norm_filename"] = ""
 
         # Use pymongo bulk_write via raw collection API
         try:

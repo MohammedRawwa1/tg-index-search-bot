@@ -21,9 +21,49 @@ import pathlib
 import re
 from datetime import datetime, timedelta
 import uuid
+import urllib.parse
 
 # Enable per-line enrichment debug logging when set (ENRICH_DEBUG=1|true|yes)
 ENRICH_DEBUG = os.getenv("ENRICH_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+async def _reject_if_not_owner(token: str, chat_id: int) -> bool:
+    """
+    Check if the sender (by chat_id) is the configured bot owner.
+
+    If an owner is configured and the sender is not the owner, send
+    "Unauthorized" and return True so the caller can return early.
+    If no owner is configured, or the sender is the owner, return False.
+    """
+    try:
+        owner = settings.BOT_OWNER or settings.OWNER_ID
+        if owner and int(owner) != int(chat_id):
+            await _send_tg(token, chat_id, "Unauthorized")
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def _reject_callback_if_not_owner(token: str, cq: dict) -> bool:
+    """
+    Check if the callback sender (by from.id) is the configured bot owner.
+
+    Uses _answer_callback to reply with "Unauthorized" (show_alert=True)
+    and returns True so the caller can return early.
+    """
+    try:
+        from_id = cq.get("from", {}).get("id")
+        owner = settings.BOT_OWNER or settings.OWNER_ID
+        if owner and int(from_id) != int(owner):
+            try:
+                await _answer_callback(token, cq.get("id"), text="Unauthorized", show_alert=True)
+            except Exception:
+                pass
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _escape_markdown(text: str) -> str:
@@ -236,6 +276,39 @@ async def startup():
         except Exception:
             pass
         app.state.db = None
+
+    # ── Auto webhook registration ──
+    # For each configured bot token, register the webhook URL with Telegram
+    # so updates are delivered to this service. This prevents issues where
+    # a bot's webhook was previously set to a different URL.
+    public_url = getattr(settings, "PUBLIC_URL", None)
+    if not public_url:
+        public_url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    if public_url:
+        for cred in (settings.API_CREDENTIALS or []):
+            bot_token = cred.get("bot_token")
+            if not bot_token:
+                continue
+            webhook_url = f"{public_url.rstrip('/')}/webhook/{bot_token}"
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        f"https://api.telegram.org/bot{bot_token}/setWebhook",
+                        params={"url": webhook_url},
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("ok"):
+                            logger.info("Webhook registered for bot: url={} description={}", webhook_url, data.get("description"))
+                        else:
+                            logger.warning("Webhook registration returned error for bot: {}", data)
+                    else:
+                        logger.warning("Webhook registration HTTP {} for bot", resp.status_code)
+            except Exception:
+                logger.exception("Failed to register webhook for bot token ending with {}...", bot_token[-8:] if len(bot_token) > 8 else bot_token)
+    else:
+        logger.warning("PUBLIC_URL not set — skipping auto webhook registration")
 
     # Automatic background backfill worker (optional)
     if getattr(settings, "BACKFILL_AUTO", False):
@@ -457,8 +530,62 @@ async def root_post(payload: dict = None):
     return {"ok": True}
 
 
-
 @app.post("/webhook/{token}")
+@app.post("/webhook/{token}/")
+async def telegram_webhook_with_slash(token: str, update: dict):
+    """Alias: accept /webhook/<token>/ (trailing slash) as well."""
+    return await telegram_webhook(token, update)
+
+
+# Compatibility endpoints: accept webhook POSTs at the token root path
+# (e.g. https://host/<BOT_TOKEN>/). Many users set the webhook URL to
+# the raw bot token path instead of /webhook/<token>. Accept both with and
+# without trailing slash and forward to the canonical handler.
+@app.post("/{token}")
+@app.post("/{token}/")
+async def telegram_webhook_token_root(token: str, update: dict):
+    # Only handle obvious bot-token-like paths to avoid capturing other routes
+    configured_tokens = [c.get("bot_token") for c in settings.API_CREDENTIALS if c.get("bot_token")]
+    # Accept when token contains a colon (typical bot token format) or matches configured token
+    if ":" not in token and token not in configured_tokens:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "unknown token"})
+    # Forward to canonical handler
+    return await telegram_webhook(token, update)
+
+
+# Fallback: catch any POST and attempt to extract a bot token from the raw path
+# This helps with percent-encoded tokens (e.g. colon encoded as %3A) or unusual
+# gateway rewrites where the token path isn't matched by the explicit route.
+@app.post("/{full_path:path}")
+async def telegram_webhook_fallback(full_path: str, request: Request):
+    raw = request.scope.get("raw_path")
+    if raw:
+        try:
+            # raw_path is bytes; decode using latin-1 to preserve byte values
+            raw_path = raw.decode("latin-1")
+        except Exception:
+            raw_path = request.url.path
+    else:
+        raw_path = request.url.path
+
+    # split segments and inspect each for a bot token-looking value
+    segments = [s for s in raw_path.strip("/").split("/") if s]
+    configured_tokens = [c.get("bot_token") for c in settings.API_CREDENTIALS if c.get("bot_token")]
+
+    for seg in reversed(segments):
+        seg_dec = urllib.parse.unquote(seg)
+        if ":" in seg_dec or seg_dec in configured_tokens:
+            try:
+                body = await request.json()
+            except Exception:
+                try:
+                    raw_body = await request.body()
+                    body = json.loads(raw_body.decode("utf-8", errors="ignore") if isinstance(raw_body, (bytes, bytearray)) else raw_body)
+                except Exception:
+                    body = {}
+            return await telegram_webhook(seg_dec, body)
+
+    return JSONResponse(status_code=404, content={"ok": False, "error": "unknown token"})
 async def telegram_webhook(token: str, update: dict):
     """Process Telegram Bot API webhook updates for configured bot tokens.
 
@@ -722,6 +849,138 @@ async def telegram_webhook(token: str, update: dict):
                     except Exception:
                         pass
                     return JSONResponse(status_code=200, content={"ok": True})
+            # Admin callbacks: handle clear_all actions from inline buttons
+            # e.g. C|delete, C|drop, C|cancel
+            if data.startswith("C|"):
+                action = data.split("|", 1)[1]
+                if await _reject_callback_if_not_owner(token, cq):
+                    return JSONResponse(status_code=200, content={"ok": True})
+
+                try:
+                    db = getattr(app.state, "db", None)
+                    msg = cq.get("message")
+                    if action == "delete":
+                        # Try to delete via app state DB if available
+                        if db is not None:
+                            try:
+                                await db.get_collection("files").delete_many({})
+                                await db.get_collection("index_state").delete_many({})
+                            except Exception:
+                                logger.exception("API clear_all: delete operation failed using app.state.db")
+                        else:
+                            # Fallback: create a temporary AsyncIOMotorClient to perform deletion
+                            try:
+                                tmp_client = AsyncIOMotorClient(settings.MONGO_URI)
+                                tmp_db = tmp_client[settings.DB_NAME]
+                                try:
+                                    await tmp_db.get_collection("files").delete_many({})
+                                    await tmp_db.get_collection("index_state").delete_many({})
+                                except Exception:
+                                    logger.exception("API clear_all: delete operation failed using fallback motor client")
+                                try:
+                                    tmp_client.close()
+                                except Exception:
+                                    pass
+                            except Exception:
+                                logger.exception("API clear_all: could not create fallback motor client")
+                        edit_url = f"https://api.telegram.org/bot{token}/editMessageText"
+                        payload = {"text": "Documents deleted."}
+                        if msg and msg.get("chat"):
+                            payload["chat_id"] = msg.get("chat", {}).get("id")
+                            payload["message_id"] = msg.get("message_id")
+                        else:
+                            imid = cq.get("inline_message_id")
+                            if imid:
+                                payload["inline_message_id"] = imid
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                await client.post(edit_url, json=payload, timeout=10)
+                        except Exception:
+                            pass
+                        try:
+                            await _answer_callback(token, cq.get("id"), text="Deleted")
+                        except Exception:
+                            pass
+                    elif action == "drop":
+                        if db is not None:
+                            try:
+                                try:
+                                    await db.drop_collection("files")
+                                except Exception:
+                                    pass
+                                try:
+                                    await db.drop_collection("index_state")
+                                except Exception:
+                                    pass
+                            except Exception:
+                                logger.exception("API clear_all: drop operation failed using app.state.db")
+                        else:
+                            # Fallback: create a temporary AsyncIOMotorClient
+                            try:
+                                tmp_client = AsyncIOMotorClient(settings.MONGO_URI)
+                                tmp_db = tmp_client[settings.DB_NAME]
+                                try:
+                                    try:
+                                        await tmp_db.drop_collection("files")
+                                    except Exception:
+                                        pass
+                                    try:
+                                        await tmp_db.drop_collection("index_state")
+                                    except Exception:
+                                        pass
+                                except Exception:
+                                    logger.exception("API clear_all: drop operation failed using fallback motor client")
+                                try:
+                                    tmp_client.close()
+                                except Exception:
+                                    pass
+                            except Exception:
+                                logger.exception("API clear_all: could not create fallback motor client for drop")
+                        edit_url = f"https://api.telegram.org/bot{token}/editMessageText"
+                        payload = {"text": "Collections dropped."}
+                        if msg and msg.get("chat"):
+                            payload["chat_id"] = msg.get("chat", {}).get("id")
+                            payload["message_id"] = msg.get("message_id")
+                        else:
+                            imid = cq.get("inline_message_id")
+                            if imid:
+                                payload["inline_message_id"] = imid
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                await client.post(edit_url, json=payload, timeout=10)
+                        except Exception:
+                            pass
+                        try:
+                            await _answer_callback(token, cq.get("id"), text="Dropped")
+                        except Exception:
+                            pass
+                    else:
+                        edit_url = f"https://api.telegram.org/bot{token}/editMessageText"
+                        payload = {"text": "Cancelled."}
+                        if msg and msg.get("chat"):
+                            payload["chat_id"] = msg.get("chat", {}).get("id")
+                            payload["message_id"] = msg.get("message_id")
+                        else:
+                            imid = cq.get("inline_message_id")
+                            if imid:
+                                payload["inline_message_id"] = imid
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                await client.post(edit_url, json=payload, timeout=10)
+                        except Exception:
+                            pass
+                        try:
+                            await _answer_callback(token, cq.get("id"), text="Cancelled")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.exception("API clear callback failed: {}", e)
+                    try:
+                        await _answer_callback(token, cq.get("id"), text="Error", show_alert=True)
+                    except Exception:
+                        pass
+                return JSONResponse(status_code=200, content={"ok": True})
+
     except Exception:
         # ensure we don't break webhook on callback handling errors
         logger.exception("callback handling error")
@@ -763,16 +1022,12 @@ async def telegram_webhook(token: str, update: dict):
         return {"ok": True}
 
     if cmd == "/help":
-        help_text = "Commands:\n/search <query> — Search files"
+        help_text = "Commands:\n/search <query> — Search files\n/stats — Indexed file counts (owner only)\n/reindex <chat_id> — Backfill chat history (owner only)\n/health — DB health (owner only)\n/clear_all — Clear all indexed files (owner only)"
         await _send_tg(token, chat_id, help_text)
         return {"ok": True}
 
     if cmd == "/stats":
-        # Bot owner only
-        from_user_id = (message.get("from") or {}).get("id")
-        owner = settings.BOT_OWNER or settings.OWNER_ID
-        if owner is not None and from_user_id != int(owner):
-            await _send_tg(token, chat_id, "Unauthorized")
+        if await _reject_if_not_owner(token, chat_id):
             return {"ok": True}
         db = getattr(app.state, "db", None)
         if db is None:
@@ -788,11 +1043,7 @@ async def telegram_webhook(token: str, update: dict):
         return {"ok": True}
 
     if cmd == "/health":
-        # Bot owner only
-        from_user_id = (message.get("from") or {}).get("id")
-        owner = settings.BOT_OWNER or settings.OWNER_ID
-        if owner is not None and from_user_id != int(owner):
-            await _send_tg(token, chat_id, "Unauthorized")
+        if await _reject_if_not_owner(token, chat_id):
             return {"ok": True}
         mongo_client = getattr(app.state, "mongo_client", None)
         db = getattr(app.state, "db", None)
@@ -807,13 +1058,27 @@ async def telegram_webhook(token: str, update: dict):
                 await _send_tg(token, chat_id, f"Health: error: {exc}")
         return {"ok": True}
 
-    if cmd == "/reindex":
-        # Bot owner only
-        from_user_id = (message.get("from") or {}).get("id")
-        owner = settings.BOT_OWNER or settings.OWNER_ID
-        if owner is not None and from_user_id != int(owner):
-            await _send_tg(token, chat_id, "Unauthorized")
+    if cmd == "/clear_all":
+        if await _reject_if_not_owner(token, chat_id):
             return {"ok": True}
+
+        kb = [
+            [
+                {"text": "Delete", "callback_data": "C|delete"},
+                {"text": "Drop", "callback_data": "C|drop"},
+            ],
+            [{"text": "Cancel", "callback_data": "C|cancel"}],
+        ]
+        try:
+            await _send_tg(token, chat_id, "Clear ALL indexed files?\nDelete = safer, Drop = faster.", reply_markup=kb)
+        except Exception:
+            logger.exception("Failed to send clear_all confirmation from API webhook")
+        return {"ok": True}
+
+    if cmd == "/reindex":
+        if await _reject_if_not_owner(token, chat_id):
+            return {"ok": True}
+
         # /reindex <chat_id> optionally. We'll spawn scripts/backfill.py as a subprocess
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
@@ -892,23 +1157,23 @@ async def telegram_webhook(token: str, update: dict):
                 pass
         return {"ok": True}
 
-        chat = message.get("chat") or {}
-        chat_id = chat.get("id")
-        if chat_id:
-            tg_url = f"https://api.telegram.org/bot{token}/sendMessage"
-            payload = {"chat_id": chat_id, "text": reply_text, "parse_mode": "MarkdownV2"}
-            async with httpx.AsyncClient() as client:
-                try:
-                    resp = await client.post(tg_url, json=payload, timeout=10)
-                    logger.info("Telegram sendMessage response: status={}, body={}", resp.status_code, resp.text[:400])
-                except Exception as exc:
-                    logger.exception("Failed to POST to Telegram API: {}", exc)
-
     return {"ok": True}
 
 
 async def _process_search_and_send(token: str, chat_id: int, query: str) -> None:
     """Background task: run search and send reply via Telegram HTTP API."""
+    # Diagnostic: log entry and mask token for safety
+    try:
+        masked = None
+        try:
+            if token:
+                masked = (token[:4] + "..." + token[-4:]) if len(token) > 8 else token
+        except Exception:
+            masked = "[unknown]"
+        logger.info("_process_search_and_send start: token={} chat={} query={}", masked, chat_id, (query or "")[:200])
+    except Exception:
+        pass
+
     try:
         res = await api_search(q=query, page=1, per_page=50)
     except Exception as exc:
@@ -926,6 +1191,16 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         total = res.get("total", 0)
         if not results:
             reply_text = f"*No results* for {_escape_markdown(query)}"
+            # Short-circuit: send a simple 'no results' reply immediately
+            try:
+                await _send_tg(token, chat_id, reply_text, parse_mode="Markdown")
+                try:
+                    logger.info("_process_search_and_send: sent no-results to chat {}", chat_id)
+                except Exception:
+                    pass
+            except Exception:
+                logger.exception("_process_search_and_send: failed to send no-results message")
+            return
         else:
             lines = [f"*Search:* {_escape_markdown(query)} — {total} results"]
             from app.utils.helpers import sanitize_filename_for_display
@@ -955,6 +1230,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
     # in other branches below.
 
     try:
+        logger.info("_process_search_and_send: total={} results_len={}", total, len(results))
         if len(reply_text) <= MAX_MSG:
             # Build a HTML message body where each result is an inline <a> link
             # so users can click links directly in the message text.
@@ -1683,6 +1959,11 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         except Exception:
             pass
         return
+
+    try:
+        logger.info("_process_search_and_send: attempting simple send (len={})", len(reply_text))
+    except Exception:
+        pass
 
     tg_url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": reply_text, "parse_mode": "Markdown"}
