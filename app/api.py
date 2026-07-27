@@ -4,6 +4,7 @@ import json
 from fastapi.staticfiles import StaticFiles
 import os
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import OperationFailure
 import certifi
 import ssl
 from app.config.settings import settings
@@ -192,6 +193,11 @@ async def startup():
                 # text index on search_text used by $text queries
                 await app.state.db.get_collection("files").create_index([("search_text", "text")], background=True)
                 logger.info("Ensured text index files(search_text)")
+            except OperationFailure as of:
+                if of.code == 85:
+                    logger.warning("Text index already exists (code 85): {} — using existing index", of)
+                else:
+                    logger.warning("Failed to create text index files(search_text): code={} {}", of.code, of)
             except Exception:
                 logger.exception("Failed to create text index files(search_text)")
         except Exception:
