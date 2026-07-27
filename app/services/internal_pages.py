@@ -121,7 +121,7 @@ class InternalPageStore:
                                 doc_part["line_refs"] = refs_slice
                             res = await col.insert_one(doc_part)
                             pid = str(res.inserted_id)
-                            logger.info("SAVE PAGE | id=%s group=%s part=%s/%s results=%s", pid, group_id, idx, total_parts_calc, total_results_calc)
+                            logger.info("SAVE PAGE | id={} group={} part={}/{} results={}", pid, group_id, idx, total_parts_calc, total_results_calc)
                             if idx == 0:
                                 first_info = {
                                     "page_id": pid,
@@ -160,7 +160,7 @@ class InternalPageStore:
                                 doc_part["page_header"] = page_header
                             res = await col.insert_one(doc_part)
                             pid = str(res.inserted_id)
-                            logger.info("SAVE PAGE | id=%s group=%s part=%s/%s results=%s", pid, group_id, idx, total_parts_calc, total_results_calc)
+                            logger.info("SAVE PAGE | id={} group={} part={}/{} results={}", pid, group_id, idx, total_parts_calc, total_results_calc)
                             if idx == 0:
                                 first_info = {
                                     "page_id": pid,
@@ -201,7 +201,7 @@ class InternalPageStore:
 
         res = await col.insert_one(doc)
         page_id = str(res.inserted_id)
-        logger.info("SAVE PAGE | id=%s group=%s part=%s/%s results=%s", page_id, doc.get("group"), doc.get("part_index"), doc.get("total_parts"), doc.get("total_results"))
+        logger.info("SAVE PAGE | id={} group={} part={}/{} results={}", page_id, doc.get("group"), doc.get("part_index"), doc.get("total_parts"), doc.get("total_results"))
         return {
             "page_id": page_id,
             "created_at": doc["created_at"].isoformat(),
@@ -222,12 +222,12 @@ class InternalPageStore:
         try:
             oid = ObjectId(page_id)
         except Exception:
-            logger.error("Invalid page_id: %s", page_id)
+            logger.error("Invalid page_id: {}", page_id)
             return None
 
         doc = await col.find_one({"_id": oid})
         if not doc:
-            logger.error("Page not found: %s", page_id)
+            logger.error("Page not found: {}", page_id)
             return None
 
         out = {
@@ -310,7 +310,7 @@ class InternalPageStore:
         try:
             oid = ObjectId(page_id)
         except Exception:
-            logger.error("set_top_links: invalid page_id=%s", page_id)
+            logger.error("set_top_links: invalid page_id={}", page_id)
             return False
         try:
             db_name = getattr(settings, "TELEGRAPH_DB", "course_bot")
@@ -324,7 +324,7 @@ class InternalPageStore:
                 return True
             return False
         except Exception as e:
-            logger.exception("set_top_links: failed to set top_links for %s: %s", page_id, e)
+            logger.exception("set_top_links: failed to set top_links for {}: {}", page_id, e)
             return False
         
 
@@ -388,7 +388,7 @@ class InMemoryInternalPageStore:
                                 doc_part["line_refs"] = refs_slice
                             self.pages[pid] = doc_part
                             self.groups.setdefault(group_id, []).append(pid)
-                            logger.info("SAVE PAGE (mem) | id=%s group=%s part=%s/%s results=%s", pid, group_id, idx, total_parts_calc, total_results_calc)
+                            logger.info("SAVE PAGE (mem) | id={} group={} part={}/{} results={}", pid, group_id, idx, total_parts_calc, total_results_calc)
                             if idx == 0:
                                 first_info = {"page_id": pid, "created_at": doc_part["created_at"].isoformat(), "author": doc_part.get("created_by"), "markdown": doc_part.get("content"), "group": doc_part.get("group"), "part_index": doc_part.get("part_index"), "total_parts": doc_part.get("total_parts"), "total_results": doc_part.get("total_results")} 
                         if first_info:
@@ -419,7 +419,7 @@ class InMemoryInternalPageStore:
                                 doc_part["page_header"] = page_header
                             self.pages[pid] = doc_part
                             self.groups.setdefault(group_id, []).append(pid)
-                            logger.info("SAVE PAGE (mem) | id=%s group=%s part=%s/%s results=%s", pid, group_id, idx, total_parts_calc, total_results_calc)
+                            logger.info("SAVE PAGE (mem) | id={} group={} part={}/{} results={}", pid, group_id, idx, total_parts_calc, total_results_calc)
                             if idx == 0:
                                 first_info = {"page_id": pid, "created_at": doc_part["created_at"].isoformat(), "author": doc_part.get("created_by"), "markdown": doc_part.get("content"), "group": doc_part.get("group"), "part_index": doc_part.get("part_index"), "total_parts": doc_part.get("total_parts"), "total_results": doc_part.get("total_results")} 
                         if first_info:

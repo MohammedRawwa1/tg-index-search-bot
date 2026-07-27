@@ -77,7 +77,7 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
                 try:
                     text_html = _md_to_html(text_md_clean, one_per_line=True)
                 except Exception as e:
-                    logger.exception("md->html conversion failed: %s", e)
+                    logger.exception("md->html conversion failed: {}", e)
                     text_html = None
 
             if text_html:
@@ -87,13 +87,13 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
                         await edit_msg.edit_text(text_html, reply_markup=reply_markup_obj, parse_mode="HTML")
                         continue
                     except Exception as e:
-                        logger.exception("edit_text HTML failed (attempting plain fallback): %s", e)
+                        logger.exception("edit_text HTML failed (attempting plain fallback): {}", e)
                         try:
                             fallback_plain = md_to_plain_text(text_md) if md_to_plain_text else (unescape_for_plain_text(text_md) if unescape_for_plain_text else text_md)
                             await edit_msg.edit_text(fallback_plain, reply_markup=reply_markup_obj)
                             continue
                         except Exception as e2:
-                            logger.exception("edit_text plain fallback also failed: %s", e2)
+                            logger.exception("edit_text plain fallback also failed: {}", e2)
                             pass
 
                 # send as new message
@@ -107,7 +107,7 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
                     except Exception:
                         pass
                 except Exception as e:
-                    logger.exception("send_message HTML failed; falling back to plain: %s", e)
+                    logger.exception("send_message HTML failed; falling back to plain: {}", e)
                     try:
                         plain = md_to_plain_text(text_md) if md_to_plain_text else (unescape_for_plain_text(text_md) if unescape_for_plain_text else text_md)
                         if idx == 0:
@@ -119,7 +119,7 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
                         except Exception:
                             pass
                     except Exception as e2:
-                        logger.exception("plain send also failed: %s", e2)
+                        logger.exception("plain send also failed: {}", e2)
             else:
                 # plain-text path
                 try:
@@ -128,7 +128,7 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
                             await edit_msg.edit_text(text_md, reply_markup=reply_markup_obj)
                             continue
                         except Exception as e:
-                            logger.exception("edit_text plain failed: %s", e)
+                            logger.exception("edit_text plain failed: {}", e)
                             pass
                     if idx == 0:
                         await client_obj.send_message(chat_id, text_md, reply_markup=reply_markup_obj)
@@ -139,7 +139,7 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
                     except Exception:
                         pass
                 except Exception as e:
-                    logger.exception("send_message plain failed: %s", e)
+                    logger.exception("send_message plain failed: {}", e)
                     pass
         except Exception:
             pass
@@ -335,8 +335,8 @@ async def save_pages(store, query, tokens, chunk_iter, user_id):
             )
             pages.append(saved["page_id"])
         except Exception:
-            logger.exception("save_pages: failed to save part %s", part)
-    logger.info("save_pages: query=%s parts=%s total_results=%s user=%s", query, total_parts, total_results, user_id)
+            logger.exception("save_pages: failed to save part {}", part)
+    logger.info("save_pages: query={} parts={} total_results={} user={}", query, total_parts, total_results, user_id)
     return pages
 
 
@@ -443,7 +443,7 @@ def register_search_handlers(client: Client, mongo):
                     await send_markdown_chunks(client, chat_id_target, header, combined_md, reply_markup_obj, edit_msg=searching)
                     return
                 except Exception as e:
-                    logger.exception("auto stream failed: %s", e)
+                    logger.exception("auto stream failed: {}", e)
         except Exception:
             pass
 
@@ -461,7 +461,7 @@ def register_search_handlers(client: Client, mongo):
                     await send_markdown_chunks(client, chat_id_target, None, text, reply_markup_obj, edit_msg=searching, max_msg=MAX_MSG)
                     return
                 except Exception as e:
-                    logger.exception("chunked send failed: %s", e)
+                    logger.exception("chunked send failed: {}", e)
             except Exception:
                 pass
 
@@ -524,7 +524,7 @@ def register_search_handlers(client: Client, mongo):
             header = f"*Search:* {query} — {count} results\n\n" if query else ""
             await send_markdown_chunks(client, message.chat.id, header, md_safe, reply_markup_obj=None, edit_msg=notice)
         except Exception as exc:
-            logger.exception("export failed: %s", exc)
+            logger.exception("export failed: {}", exc)
             await message.reply_text("Export failed.")
         finally:
             try:

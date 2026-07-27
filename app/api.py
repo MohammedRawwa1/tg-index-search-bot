@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Query, HTTPException, Request
-from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse, StreamingResponse, HTMLResponse
+from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse, StreamingResponse, HTMLResponse, Response
 import json
 from fastapi.staticfiles import StaticFiles
 import os
@@ -366,15 +366,15 @@ async def startup():
                     while True:
                         for chat_id in chat_list:
                             try:
-                                logger.info("Auto backfill: processing chat %s", chat_id)
+                                logger.info("Auto backfill: processing chat {}", chat_id)
                                 await backfill_history(pg_client, mongo_sync, chat_id)
                                 # regenerate markdown index and persist
                                 try:
                                     await _generate_and_persist_md(chat_id)
                                 except Exception:
-                                    logger.exception("Failed to persist media index for %s", chat_id)
+                                    logger.exception("Failed to persist media index for {}", chat_id)
                             except Exception:
-                                logger.exception("Auto backfill: error processing chat %s", chat_id)
+                                logger.exception("Auto backfill: error processing chat {}", chat_id)
                         await asyncio.sleep(interval)
                 finally:
                     try:
@@ -419,6 +419,11 @@ async def favicon():
 @app.get("/")
 async def root_get():
     return {"ok": True, "service": "tg-index-search-bot"}
+
+
+@app.head("/")
+async def root_head():
+    return Response(status_code=200)
 
 
 @app.post("/")
@@ -471,7 +476,7 @@ async def telegram_webhook(token: str, update: dict):
         if update.get("callback_query"):
             cq = update.get("callback_query")
             data = cq.get("data") or ""
-            logger.info("webhook callback received data=%s chat=%s", data, cq.get("message", {}).get("chat", {}).get("id"))
+            logger.info("webhook callback received data={} chat={}", data, cq.get("message", {}).get("chat", {}).get("id"))
             # quick responder for noop (empty data)
             if not data:
                 try:
@@ -503,9 +508,9 @@ async def telegram_webhook(token: str, update: dict):
                         await _answer_callback(token, cq.get("id"), text="Page not found")
                         return JSONResponse(status_code=200, content={"ok": True})
                     try:
-                        logger.debug("webhook: fetched page id=%s keys=%s", page_id, list(page.keys()) if isinstance(page, dict) else None)
-                        logger.debug("webhook: page preview=%s", (page.get("content")[:200] if page.get("content") else None))
-                        logger.debug("webhook: page query=%r total_results=%r", page.get("query"), page.get("total_results"))
+                        logger.debug("webhook: fetched page id={} keys={}", page_id, list(page.keys()) if isinstance(page, dict) else None)
+                        logger.debug("webhook: page preview={}", (page.get("content")[:200] if page.get("content") else None))
+                        logger.debug("webhook: page query={} total_results={}", page.get("query"), page.get("total_results"))
                     except Exception:
                         pass
 
@@ -606,7 +611,7 @@ async def telegram_webhook(token: str, update: dict):
                                     body_text = resp.text or ""
                                 except Exception:
                                     body_text = ""
-                                logger.info("callback editMessageText response: status=%s body=%s", resp.status_code, body_text[:800])
+                                logger.info("callback editMessageText response: status={} body={}", resp.status_code, body_text[:800])
                                 if resp.status_code == 200:
                                     pass
                                 else:
@@ -614,7 +619,7 @@ async def telegram_webhook(token: str, update: dict):
                                     try:
                                         logger.debug("callback editMessageText response: status={} body={} request_payload={}", resp.status_code, body_text[:2000], json.dumps(payload, ensure_ascii=False)[:2000])
                                     except Exception:
-                                        logger.debug("callback editMessageText response: status=%s body=%s", resp.status_code, body_text[:2000])
+                                        logger.debug("callback editMessageText response: status={} body={}", resp.status_code, body_text[:2000])
 
                                     if payload.get("parse_mode") and resp.status_code == 400 and (
                                         "can't parse entities" in body_text.lower() or "parse entities" in body_text.lower()
@@ -698,7 +703,7 @@ async def telegram_webhook(token: str, update: dict):
                                             except Exception:
                                                 logger.exception("callback edit fallback failed")
                                     else:
-                                        logger.error("editMessageText failed status=%s body=%s", resp.status_code, body_text[:400])
+                                        logger.error("editMessageText failed status={} body={}", resp.status_code, body_text[:400])
                         except Exception:
                             logger.exception("callback edit error handling response")
                         try:
@@ -1090,7 +1095,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                 )
                                 pages.append(saved.get("page_id"))
                             except Exception:
-                                logger.exception("api_search: failed to save page part %s/%s", part_index + 1, total_parts)
+                                logger.exception("api_search: failed to save page part {}/{}", part_index + 1, total_parts)
 
                         # Build top_links from preview results and persist
                         top_links = []
@@ -1123,13 +1128,13 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
 
                         try:
                             store_for_links = _ensure_internal_page_store()
-                            logger.info("api_search: set_top_links store=%s pages=%s top_links=%s", "present" if store_for_links else "absent", len(pages), len(top_links))
+                            logger.info("api_search: set_top_links store={} pages={} top_links={}", "present" if store_for_links else "absent", len(pages), len(top_links))
                             if store_for_links:
                                 try:
                                     await store_for_links.set_top_links(pages[0], top_links)
-                                    logger.info("api_search: set_top_links succeeded for page %s", pages[0])
+                                    logger.info("api_search: set_top_links succeeded for page {}", pages[0])
                                 except Exception:
-                                    logger.exception("api_search: set_top_links failed for page %s", pages[0])
+                                    logger.exception("api_search: set_top_links failed for page {}", pages[0])
                         except Exception:
                             logger.exception("api_search: error checking store_for_links")
 
@@ -1141,7 +1146,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                             try:
                                 first = await store.get_page(pages[0])
                                 if not first:
-                                    logger.error("First page is None: %s", pages[0])
+                                    logger.error("First page is None: {}", pages[0])
                                 else:
                                     try:
                                         # Build full Markdown lines from group pages
@@ -1235,7 +1240,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 try:
                     # Force usage of internal page store (create in-memory fallback if needed)
                     store = _ensure_internal_page_store()
-                    logger.info("api_search: total=%s max_inline=%s internal_page_store=%s", total, max_inline, "present" if store else "absent")
+                    logger.info("api_search: total={} max_inline={} internal_page_store={}", total, max_inline, "present" if store else "absent")
                     toks = tokenize_query(query) if store else []
 
                     # Determine the full set of results to include in pages
@@ -1353,7 +1358,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                         for part_index, (chunk, chunk_refs) in enumerate(chunks_with_refs):
                             try:
                                 try:
-                                    logger.debug("api_search: saving page part %s/%s query=%r preview=%s", part_index + 1, total_parts, query, (chunk[:200] if chunk else None))
+                                    logger.debug("api_search: saving page part {}/{} query={} preview={}", part_index + 1, total_parts, query, (chunk[:200] if chunk else None))
                                 except Exception:
                                     pass
                                 saved = await store.save_raw_page(
@@ -1370,9 +1375,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                 )
                                 pid = saved.get("page_id")
                                 pages.append(pid)
-                                logger.info("api_search: saved internal page %s (%s/%s)", pid, part_index + 1, total_parts)
+                                logger.info("api_search: saved internal page {} ({}/{})", pid, part_index + 1, total_parts)
                             except Exception:
-                                logger.exception("api_search: failed to save page part %s/%s", part_index + 1, total_parts)
+                                logger.exception("api_search: failed to save page part {}/{}", part_index + 1, total_parts)
                 except Exception:
                     pages = []
 
@@ -1405,13 +1410,13 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                         # persist top_links into the first saved page doc for callback rendering
                         try:
                             store_for_links = _ensure_internal_page_store()
-                            logger.info("api_search: set_top_links store=%s pages=%s top_links=%s", "present" if store_for_links else "absent", len(pages), len(top_links))
+                            logger.info("api_search: set_top_links store={} pages={} top_links={}", "present" if store_for_links else "absent", len(pages), len(top_links))
                             if store_for_links:
                                 try:
                                     await store_for_links.set_top_links(pages[0], top_links)
-                                    logger.info("api_search: set_top_links succeeded for page %s", pages[0])
+                                    logger.info("api_search: set_top_links succeeded for page {}", pages[0])
                                 except Exception:
-                                    logger.exception("api_search: set_top_links failed for page %s", pages[0])
+                                    logger.exception("api_search: set_top_links failed for page {}", pages[0])
                         except Exception:
                             logger.exception("api_search: error checking store_for_links")
 
@@ -1422,7 +1427,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                         try:
                             first = await store.get_page(pages[0])
                             if not first:
-                                logger.error("First page is None: %s", pages[0])
+                                logger.error("First page is None: {}", pages[0])
                             else:
                                 try:
                                     # Send all saved page parts as full Markdown (no truncation)
@@ -1513,7 +1518,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         # Prefer using the internal page GUI when a store is available.
         try:
             store = _ensure_internal_page_store()
-            logger.info("api_search: telegraph/internal-page branch check; internal_page_store=%s reply_len=%s", "present" if store else "absent", len(reply_text))
+            logger.info("api_search: telegraph/internal-page branch check; internal_page_store={} reply_len={}", "present" if store else "absent", len(reply_text))
             toks = tokenize_query(query)
             if store:
                 # split reply_text into chunks (by lines) and save multiple pages
@@ -1531,7 +1536,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 total_results = len(lines)
                 for part_index, chunk in enumerate(chunks):
                     try:
-                        logger.debug("api_search: saving reply_text page part %s/%s query=%r preview=%s", part_index + 1, total_parts, query, (chunk[:200] if chunk else None))
+                        logger.debug("api_search: saving reply_text page part {}/{} query={} preview={}", part_index + 1, total_parts, query, (chunk[:200] if chunk else None))
                     except Exception:
                         pass
                     saved = await store.save_raw_page(query, chunk, toks, created_by=None, group=group, part_index=part_index, total_parts=total_parts, total_results=total_results)
@@ -1786,13 +1791,13 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
                     try:
                         # Log detailed debug info about the parse error and payload
                         try:
-                            logger.warning("Telegram parse error (400) for parse_mode=%s; body=%s", payload.get("parse_mode"), (body_text or ""))
+                            logger.warning("Telegram parse error (400) for parse_mode={}; body={}", payload.get("parse_mode"), (body_text or ""))
                             try:
-                                logger.warning("Offending payload: %s", json.dumps(payload, ensure_ascii=False))
+                                logger.warning("Offending payload: {}", json.dumps(payload, ensure_ascii=False))
                             except Exception:
-                                logger.warning("Offending payload (repr): %s", repr(payload)[:10000])
+                                logger.warning("Offending payload (repr): {}", repr(payload)[:10000])
                         except Exception:
-                            logger.warning("Telegram parse error (400) for parse_mode=%s", payload.get("parse_mode"))
+                            logger.warning("Telegram parse error (400) for parse_mode={}", payload.get("parse_mode"))
                         # Try an alternative: convert HTML anchors to MarkdownV2
                         # and retry sending with `parse_mode=MarkdownV2` before
                         # falling back to plain text. This often succeeds when
@@ -1814,7 +1819,7 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
                                     if "reply_markup" in payload:
                                         alt_payload["reply_markup"] = payload.get("reply_markup")
                                     try:
-                                        logger.info("Telegram parse error: retrying with MarkdownV2 alternative payload preview: %s", (mdv2_text or "")[:320])
+                                        logger.info("Telegram parse error: retrying with MarkdownV2 alternative payload preview: {}", (mdv2_text or "")[:320])
                                     except Exception:
                                         pass
                                     resp3 = await client.post(tg_url, json=alt_payload, timeout=10)
@@ -1961,15 +1966,15 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
                 # this was the last attempt.
                 if attempt == retries:
                     try:
-                        logger.error("Telegram sendMessage failed after %d attempts: status=%s body=%s", attempt, resp.status_code, (resp.text or ""))
+                        logger.error("Telegram sendMessage failed after {} attempts: status={} body={}", attempt, resp.status_code, (resp.text or ""))
                     except Exception:
-                        logger.error("Telegram sendMessage failed after %d attempts: status=%s", attempt, resp.status_code)
+                        logger.error("Telegram sendMessage failed after {} attempts: status={}", attempt, resp.status_code)
                     return
                 else:
                     await asyncio.sleep(backoff * attempt)
 
             except Exception as exc:
-                logger.warning("Telegram send attempt %d failed: %s", attempt, exc)
+                logger.warning("Telegram send attempt {} failed: {}", attempt, exc)
                 if attempt == retries:
                     logger.exception("Failed to POST to Telegram API after retries: {}", exc)
                 else:
@@ -2265,7 +2270,7 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                                         # Last-resort: send plain text
                                         await _send_tg(token, chat_id, ctext, parse_mode=None, reply_markup=rm)
                                 except Exception:
-                                    logger.exception("_send_markdown_full: failed to send clickable plaintext chunk %s/%s", ci + 1, len(clickable_chunks))
+                                    logger.exception("_send_markdown_full: failed to send clickable plaintext chunk {}/{}", ci + 1, len(clickable_chunks))
                         except Exception:
                             logger.exception("_send_markdown_full: failed to build/send clickable plaintext fallback")
 
@@ -2319,7 +2324,7 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
             else:
                 await _send_tg(token, chat_id, text_html, parse_mode="HTML")
         except Exception:
-            logger.exception("_send_markdown_full: failed to send chunk %s/%s", idx + 1, len(chunks))
+            logger.exception("_send_markdown_full: failed to send chunk {}/{}", idx + 1, len(chunks))
             # continue to next chunk
     return
 
@@ -2934,7 +2939,7 @@ async def admin_get_page(request: Request, page_id: str, token: str | None = Non
             pass
         return JSONResponse(status_code=200, content={"ok": True, "page": doc})
     except Exception as exc:
-        logger.exception("admin_get_page failed: %s", exc)
+        logger.exception("admin_get_page failed: {}", exc)
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
@@ -2976,7 +2981,7 @@ async def admin_cache_invalidate(request: Request, token: str | None = None):
             return JSONResponse(status_code=200, content={"ok": True, "invalidated_query": body.get("query")})
         return JSONResponse(status_code=400, content={"ok": False, "error": "missing parameters"})
     except Exception as exc:
-        logger.exception("cache invalidate failed: %s", exc)
+        logger.exception("cache invalidate failed: {}", exc)
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
@@ -2998,7 +3003,7 @@ async def admin_cache_stats(request: Request, token: str | None = None):
         stats = await cache.stats()
         return JSONResponse(status_code=200, content={"ok": True, "stats": stats})
     except Exception as exc:
-        logger.exception("cache stats failed: %s", exc)
+        logger.exception("cache stats failed: {}", exc)
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
@@ -3030,7 +3035,7 @@ async def api_search(
 
     db = getattr(app.state, "db", None)
     if db is None:
-        logger.warning("api_search: MongoDB unavailable, returning empty results for query=%s", q)
+        logger.warning("api_search: MongoDB unavailable, returning empty results for query={}", q)
         return {"results": [], "total": 0}
 
     try:
@@ -3475,7 +3480,7 @@ async def api_search(
                         page_header = f"Export: {q}"
                     for part_index, (chunk, chunk_refs) in enumerate(chunks):
                         try:
-                            logger.debug("api_search(md): saving telegraph page part %s/%s query=%r preview=%s", part_index + 1, total_parts, q, (chunk[:200] if chunk else None))
+                            logger.debug("api_search(md): saving telegraph page part {}/{} query={} preview={}", part_index + 1, total_parts, q, (chunk[:200] if chunk else None))
                         except Exception:
                             pass
                         saved = await store.save_raw_page(q, chunk, tokens, created_by=None, group=group, part_index=part_index, total_parts=total_parts, total_results=total_results, page_header=page_header, line_refs=chunk_refs)

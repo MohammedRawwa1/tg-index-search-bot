@@ -202,7 +202,7 @@ class MongoService:
 
                 if existing_text_index:
                     try:
-                        logger.info("Text index already present (name=%s), skipping creation", existing_text_index.get("name"))
+                        logger.info("Text index already present (name={}), skipping creation", existing_text_index.get("name"))
                     except Exception:
                         logger.info("Text index already present, skipping creation")
                 else:
@@ -218,9 +218,9 @@ class MongoService:
                     if isinstance(exc, OperationFailure) and getattr(exc, "code", None) == 85:
                         logger.info("Text index creation skipped: equivalent index already exists")
                     else:
-                        logger.exception("Failed to create text index on files(search_text): %s", exc)
+                        logger.exception("Failed to create text index on files(search_text): {}", exc)
                 except Exception:
-                    logger.exception("Failed to create text index on files(search_text): %s", exc)
+                    logger.exception("Failed to create text index on files(search_text): {}", exc)
 
             # Indexes to speed up trigram / token queries
             try:

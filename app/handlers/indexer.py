@@ -193,8 +193,8 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
                     pass
             else:
                 logger.error(
-                    "Cannot access chat %s (peer probes failed). Possible causes: bot/account not a member, "
-                    "insufficient permissions, or peer id invalid for this session. Exception: %s",
+                    "Cannot access chat {} (peer probes failed). Possible causes: bot/account not a member, "
+                    "insufficient permissions, or peer id invalid for this session. Exception: {}",
                     target_chat_id,
                     exc,
                 )
@@ -275,7 +275,7 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
         except Exception:
             from app.utils.logger import logger
 
-            logger.exception("Failed to fetch chat history for %s", target_chat_id)
+            logger.exception("Failed to fetch chat history for {}", target_chat_id)
             return
 
     # process oldest-first and collect stats with batching

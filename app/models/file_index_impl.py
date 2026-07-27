@@ -152,7 +152,7 @@ class FileIndex:
                         file_ident = f"{int(doc['chat_id'])}:{int(doc['message_id'])}"
                         await cache.invalidate_by_file_ids([file_ident])
                     except Exception:
-                        logger.debug("upsert_file: cache.invalidate_by_file_ids failed for %s", file_ident)
+                        logger.debug("upsert_file: cache.invalidate_by_file_ids failed for {}", file_ident)
             except Exception:
                 # running outside of web app or cache unavailable
                 pass
