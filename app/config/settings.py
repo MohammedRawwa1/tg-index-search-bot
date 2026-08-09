@@ -8,6 +8,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def strip_quotes(value: Optional[str]) -> Optional[str]:
+    """Remove matching surrounding single/double quotes from an env value.
+
+    Accepts values like '"mongodb://..."' or "'mongodb://...'" so a quoted
+    MONGO_URI value (e.g. `MONGO_URI="mongodb+srv://..."`) is unquoted.
+    """
+    if not value:
+        return value
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        return value[1:-1].strip()
+    return value
+
+
 def _parse_api_credentials() -> List[Dict[str, Any]]:
     # Prefer a JSON array in API_CREDENTIALS. Fallback to single vars.
     raw = os.getenv("API_CREDENTIALS")
@@ -74,7 +88,8 @@ _owner_env = os.getenv("BOT_OWNER") or os.getenv("OWNER_ID") or os.getenv("owner
 settings = Settings(
     API_CREDENTIALS=_api_creds,
     # Accept either MONGO_URI or MONGODB_URL (common env name in user .env)
-    MONGO_URI=os.getenv("MONGO_URI", os.getenv("MONGODB_URL", "mongodb://localhost:27017/tg_index")),
+    # Strip surrounding quotes so MONGO_URI="mongodb://..." works.
+    MONGO_URI=strip_quotes(os.getenv("MONGO_URI", os.getenv("MONGODB_URL", "mongodb://localhost:27017/tg_index"))),
     DB_NAME=os.getenv("DB_NAME", os.getenv("MONGODB_NAME", os.getenv("MONGO_DB_NAME", "tg_index"))),
     TARGET_CHAT_ID=int(os.getenv("TARGET_CHAT_ID", "0")) if os.getenv("TARGET_CHAT_ID") else None,
     # Mongo connection timeout in milliseconds for server selection/ping

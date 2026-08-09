@@ -9,7 +9,8 @@ efficient upserts.
 Usage:
   python scripts/backfill_telethon.py <chat_id> [--thread-id THREAD_ID] [--limit N] [--dry-run]
 
-Requires: TELETHON_API_ID, TELETHON_API_HASH or existing .session file.
+Requires: API_ID, API_HASH (or TELETHON_API_ID/TELETHON_API_HASH)
+or existing .session file.
 """
 
 import argparse
@@ -34,11 +35,11 @@ from app.config.settings import settings
 
 
 def _choose_telethon_client():
-    api_id = os.getenv("TELETHON_API_ID") or os.getenv("TELEGRAM_APP_ID")
-    api_hash = os.getenv("TELETHON_API_HASH") or os.getenv("TELEGRAM_API_HASH")
+    api_id = os.getenv("API_ID") or os.getenv("TELETHON_API_ID") or os.getenv("TELEGRAM_APP_ID")
+    api_hash = os.getenv("API_HASH") or os.getenv("TELETHON_API_HASH") or os.getenv("TELEGRAM_API_HASH")
     session = os.getenv("TELETHON_SESSION") or os.getenv("SESSION_NAME") or "telethon_backfill"
     if not (api_id and api_hash):
-        raise RuntimeError("TELETHON_API_ID and TELETHON_API_HASH must be set in env")
+        raise RuntimeError("API_ID and API_HASH must be set in env")
     try:
         api_id = int(api_id)
     except Exception:

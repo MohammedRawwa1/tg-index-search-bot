@@ -26,7 +26,7 @@ import httpx
 from typing import List, Dict, Any
 
 try:
-    from app.config.settings import settings
+    from app.config.settings import settings, strip_quotes
     from app.services.mongo import MongoService
     from app.services.tokenizer import tokenize_query
     from app.services.search_utils import make_trigrams, trigram_similarity, TRIGRAM_MAX
@@ -92,6 +92,8 @@ def main():
 
     MONGO_URI = os.getenv("MONGO_URI")
     DB_NAME = os.getenv("DB_NAME")
+    if MONGO_URI:
+        MONGO_URI = strip_quotes(MONGO_URI)
     if not MONGO_URI or not DB_NAME:
         MONGO_URI = MONGO_URI or (settings.MONGO_URI if settings else None)
         DB_NAME = DB_NAME or (settings.DB_NAME if settings else None)

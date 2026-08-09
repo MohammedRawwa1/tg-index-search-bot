@@ -2,8 +2,9 @@
 from typing import List
 from pymongo import MongoClient
 import os
+from app.config.settings import strip_quotes
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/tg_index")
+MONGO_URI = strip_quotes(os.getenv("MONGO_URI", "mongodb://localhost:27017/tg_index"))
 DB_NAME = os.getenv("DB_NAME", "tg_index")
 client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
