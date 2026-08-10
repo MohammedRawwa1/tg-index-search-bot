@@ -37,6 +37,15 @@ async def _start() -> None:
                 setattr(client, "_bot_db", mongo.db)
             except Exception:
                 setattr(client, "_bot_db", None)
+        # attach an internal page store so the Pyrogram /search command can
+        # serve paginated results even in the standalone process. Uses the
+        # in-memory fallback (non-persistent across restarts) since main.py
+        # only has a synchronous MongoService.
+        try:
+            from app.services.internal_pages import InMemoryInternalPageStore
+            setattr(client, "_internal_page_store", InMemoryInternalPageStore())
+        except Exception:
+            pass
         indexer.register_indexer(client, mongo)
         search.register_search_handlers(client, mongo)
         # admin handlers

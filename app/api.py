@@ -14,7 +14,7 @@ import httpx
 import html
 import re
 from app.utils.logger import logger
-from app.utils.helpers import unescape_for_plain_text, render_paginated_page, md_to_plain_text
+from app.utils.helpers import unescape_for_plain_text, render_paginated_page, md_to_plain_text, _MD_LINK_RE, normalize_bracket_links
 import asyncio
 from asyncio.subprocess import PIPE
 import pathlib
@@ -84,11 +84,14 @@ def md_to_markdown(raw_text: str) -> str:
     if not raw_text:
         return ""
 
-    pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+    # Normalize bare `[Label] https://...` lines into Markdown links so
+    # they become clickable anchors (idempotent for existing links).
+    raw_text = normalize_bracket_links(raw_text)
+
     out = []
     last = 0
 
-    for m in pattern.finditer(raw_text):
+    for m in _MD_LINK_RE.finditer(raw_text):
         start, end = m.span()
 
         # normal text
@@ -310,8 +313,121 @@ async def startup():
     else:
         logger.warning("PUBLIC_URL not set — skipping auto webhook registration")
 
+    # Determine whether the API process should also run Telegram clients/backfill.
+    run_bots = (os.getenv("RUN_BOT_IN_API", "false").lower() in ("1", "true", "yes"))
+
+    # --- Start Pyrogram BotManager so the API process can also run Telegram clients ---
+    if not run_bots:
+        logger.info("RUN_BOT_IN_API not set/false; skipping BotManager and auto backfill in API process")
+        app.state.bot_manager = None
+        app.state.bot_task = None
+    else:
+        try:
+            # SessionStore uses a synchronous MongoService; try to create one for session persistence
+            try:
+                from app.services.session_store import SessionStore
+
+                sync_mongo = None
+                try:
+                    sync_mongo = MongoService(settings.MONGO_URI, settings.DB_NAME, settings.MONGO_CONNECT_TIMEOUT_MS)
+                    sync_mongo.connect()
+                except Exception:
+                    sync_mongo = None
+
+                try:
+                    session_store = SessionStore(sync_mongo) if sync_mongo is not None else None
+                except Exception:
+                    session_store = None
+            except Exception:
+                session_store = None
+
+            from app.bot import BotManager
+
+            bot_mgr = BotManager(settings.API_CREDENTIALS, session_store=session_store)
+
+            # Register handlers on each client
+            if bot_mgr.clients:
+                try:
+                    from app.handlers.indexer import register_indexer
+                except Exception:
+                    register_indexer = None
+                try:
+                    from app.handlers.search import register_search_handlers
+                except Exception:
+                    register_search_handlers = None
+
+                for client in bot_mgr.clients:
+                    # attach a sync MongoService to the client for handler convenience
+                    try:
+                        sync_ms = MongoService(settings.MONGO_URI, settings.DB_NAME, settings.MONGO_CONNECT_TIMEOUT_MS)
+                        sync_ms.connect()
+                        setattr(client, "_mongo", sync_ms)
+                        try:
+                            setattr(client, "_bot_db", sync_ms.db)
+                        except Exception:
+                            setattr(client, "_bot_db", None)
+                    except Exception:
+                        setattr(client, "_mongo", None)
+                        setattr(client, "_bot_db", None)
+
+                    # attach the API's internal page store so the Pyrogram /search
+                    # command works when bots run inside the API process
+                    try:
+                        setattr(client, "_internal_page_store", _ensure_internal_page_store())
+                    except Exception:
+                        pass
+
+                    try:
+                        if register_indexer:
+                            register_indexer(client, getattr(client, "_mongo", None))
+                    except Exception:
+                        pass
+                    try:
+                        if register_search_handlers:
+                            register_search_handlers(client, getattr(client, "_mongo", None))
+                    except Exception:
+                        pass
+                    try:
+                        from app.handlers.admin import register_admin_handlers
+                        register_admin_handlers(client, getattr(client, "_mongo", None))
+                    except Exception:
+                        pass
+
+            app.state.bot_manager = bot_mgr
+            try:
+                app.state.bot_task = asyncio.create_task(bot_mgr.start_all())
+            except Exception:
+                logger.exception("Failed to start BotManager clients")
+        except Exception:
+            logger.exception("Failed to initialize BotManager in API startup")
+
+    # Log configured bot tokens (masked) to help diagnose webhook mismatches
+    try:
+        token_list = []
+        env_bot = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+        if env_bot:
+            token_list.append(env_bot)
+        for c in getattr(settings, "API_CREDENTIALS", []):
+            t = c.get("bot_token")
+            if t:
+                token_list.append(t)
+        masked = []
+        for t in token_list:
+            try:
+                if len(t) > 8:
+                    masked.append(f"{t[:4]}...{t[-4:]}")
+                else:
+                    masked.append(t)
+            except Exception:
+                continue
+        if masked:
+            logger.info("Configured bot tokens (masked): {}", ", ".join(masked))
+    except Exception:
+        pass
+
     # Automatic background backfill worker (optional)
-    if getattr(settings, "BACKFILL_AUTO", False):
+    # Only run backfill when both BACKFILL_AUTO and RUN_BOT_IN_API are enabled
+    if run_bots and getattr(settings, "BACKFILL_AUTO", False):
         # derive chat list
         chat_list = []
         if getattr(settings, "BACKFILL_CHAT_IDS", None):
@@ -477,6 +593,20 @@ async def shutdown():
         try:
             backfill_task.cancel()
             await backfill_task
+        except Exception:
+            pass
+    # stop bot clients if started by the API
+    bot_task = getattr(app.state, "bot_task", None)
+    bot_mgr = getattr(app.state, "bot_manager", None)
+    if bot_task and not bot_task.done():
+        try:
+            bot_task.cancel()
+            await bot_task
+        except Exception:
+            pass
+    if bot_mgr:
+        try:
+            await bot_mgr.stop_all()
         except Exception:
             pass
 
@@ -2452,23 +2582,22 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                         # send a clickable plaintext fallback replacing Markdown
                         # links with `Label — URL` and removing backslash escapes
                         try:
-                            import re as _re
-                            try:
-                                from app.utils.helpers import chunk_lines_by_char_limit as _chunker, unescape_for_plain_text
-                            except Exception:
-                                _chunker = None
-                                def unescape_for_plain_text(x):
-                                    return x
+                            from app.utils.helpers import chunk_lines_by_char_limit as _chunker
+                        except Exception:
+                            _chunker = None
 
-                            pattern = _re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-                            try:
-                                clickable_lines = [_re.sub(pattern, r"\1 — \2", ln) for ln in full_md.splitlines()]
-                            except Exception:
-                                clickable_lines = full_md.splitlines()
+                        try:
+                            from app.utils.helpers import md_links_to_clickable
 
-                            # Remove Markdown backslash-escapes so plaintext is readable
-                            clickable_lines = [unescape_for_plain_text(ln) for ln in clickable_lines]
+                            # Convert `[Label](URL)` -> `Label — URL` and remove
+                            # Markdown backslash-escapes so plaintext is readable.
+                            # (unescape the whole line so non-link lines also
+                            # lose their Telegram-Markdown backslash escapes)
+                            clickable_lines = [unescape_for_plain_text(md_links_to_clickable(ln)) for ln in full_md.splitlines()]
+                        except Exception:
+                            clickable_lines = full_md.splitlines()
 
+                        try:
                             # Chunk these lines to avoid overly large messages
                             if _chunker:
                                 try:
@@ -2814,13 +2943,15 @@ async def public_page(request: Request, page_id: str):
 
             if md_line_refs and has_refs:
                 try:
+                    from app.utils.helpers import extract_md_link_label
+
                     new_html_lines = []
                     for ln, ref in zip(md_lines, md_line_refs):
                         try:
-                            # strip numeric prefix like '1) '
-                            label = re.sub(r'^\s*\d+\)\s*', '', ln)
-                            # remove markdown link if present
-                            label = re.sub(r'\[([^\]]+)\]\([^)]+\)', r"\1", label)
+                            # Extract the visible label from the Markdown link
+                            # (robust to labels containing brackets/parentheses)
+                            # and strip list markers like '1) '.
+                            label = extract_md_link_label(ln)
                             label_esc = html.escape(label)
                             if ref and ref.get("chat_id") and ref.get("message_id"):
                                 s = str(ref.get("chat_id"))

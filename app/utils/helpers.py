@@ -13,6 +13,110 @@ _phone_re = re.compile(r"\+?\d[\d\- ]{6,}\d")
 _long_num_re = re.compile(r"\d{7,}")
 
 
+# Robust Markdown link pattern used across all markdown->markdown/html
+# converters. The label may itself contain `[`/`]` or parentheses; the
+# non-greedy `.*?` anchors on the LAST `](` that closes a URL, and the URL
+# may contain balanced parentheses. No DOTALL flag, so labels never span
+# multiple lines.
+_MD_LINK_RE = re.compile(r"\[(.*?)\]\(((?:[^()]|\([^)]*\))*)\)")
+
+
+def normalize_bracket_links(raw_text: str) -> str:
+    """Normalize `[Label] <bare-url>` patterns into Markdown links.
+
+    Converts lines like ``[Some Book] https://t.me/c/...`` into
+    ``[Some Book](https://t.me/c/...)`` so downstream HTML converters can
+    produce clickable anchors.
+
+    - Already-normalized `[Label](url)` links are left untouched.
+    - Labels that themselves contain `[`/`]` are supported by matching the
+      LAST closing bracket that is immediately followed by a URL.
+    """
+    try:
+        if not raw_text:
+            return ""
+        # Protect existing `[Label](url)` links so they are not re-processed.
+        links = []
+
+        def _protect(m):
+            links.append(m.group(0))
+            return f"\x00L{len(links) - 1}\x00"
+
+        text = _MD_LINK_RE.sub(_protect, raw_text)
+
+        def _restore(m):
+            try:
+                return links[int(m.group(1))]
+            except Exception:
+                return m.group(0)
+
+        out_lines = []
+        for ln in text.splitlines():
+            # Scan from the end for `] <url>` so labels containing ']' work.
+            idx = len(ln)
+            converted = False
+            while not converted:
+                j = ln.rfind("]", 0, idx)
+                if j == -1:
+                    break
+                rest = ln[j + 1:]
+                # URL may contain balanced parentheses (mirrors _MD_LINK_RE) so
+                # bare links like `https://example.com/a(b)c` are not truncated.
+                m = re.match(r"\s*(https?://(?:[^\s())\]>]|\([^)]*\))+)", rest)
+                if m:
+                    k = ln.rfind("[", 0, j)
+                    if k != -1:
+                        label = ln[k + 1:j]
+                        url = m.group(1)
+                        ln = ln[:k] + f"[{label}]({url})" + rest[m.end():]
+                        converted = True
+                    else:
+                        break
+                else:
+                    idx = j
+            out_lines.append(ln)
+        text = "\n".join(out_lines)
+        text = re.sub(r"\x00L(\d+)\x00", _restore, text)
+        return text
+    except Exception:
+        return raw_text or ""
+
+
+def extract_md_link_label(line: str) -> str:
+    """Return the visible label text of a Markdown link line.
+
+    Extracts the label from `[Label](url)` (robust to labels containing
+    `[`/`]` or parentheses) and strips common list markers like `1) `,
+    `1. `, `- `, `* `, `• `. When no link is present the cleaned line is
+    returned as-is.
+    """
+    try:
+        if not line:
+            return ""
+        m = _MD_LINK_RE.search(line)
+        label = m.group(1) if m else line
+        label = re.sub(r"^\s*(?:\d+[\)\.]\s*|[-*\u2022]\s*)", "", label)
+        return label.strip()
+    except Exception:
+        return (line or "").strip()
+
+
+def md_links_to_clickable(text: str) -> str:
+    """Convert Markdown links to readable `Label — URL` plain text.
+
+    Backslash-escapes inserted for Telegram Markdown are removed so the
+    result is human-friendly (e.g. an escaped underscore becomes a plain one).
+    """
+    def _rep(m):
+        label = unescape_for_plain_text(m.group(1))
+        return f"{label} — {m.group(2)}"
+
+    try:
+        return _MD_LINK_RE.sub(_rep, text or "")
+    except Exception:
+        return text or ""
+
+
 def _b64_encode(s: str) -> str:
     return base64.urlsafe_b64encode(s.encode()).decode()
 
@@ -315,10 +419,12 @@ def md_to_markdownv2(raw_text: str) -> str:
     try:
         if not raw_text:
             return ""
-        pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+        # Normalize bare `[Label] https://...` lines into Markdown links so
+        # they become clickable anchors (idempotent for existing links).
+        raw_text = normalize_bracket_links(raw_text)
         out_parts = []
         last = 0
-        for m in pattern.finditer(raw_text):
+        for m in _MD_LINK_RE.finditer(raw_text):
             start, end = m.span()
             non = raw_text[last:start]
             out_parts.append(escape_md_v2(non))
@@ -381,8 +487,7 @@ def md_to_plain_text(md: str) -> str:
         if md is None:
             return ""
         # strip markdown links to labels
-        pattern = re.compile(r"\[([^\]]+)\]\([^)]+\)")
-        out = pattern.sub(r"\1", str(md))
+        out = _MD_LINK_RE.sub(r"\1", str(md))
         # remove remaining Markdown escapes
         out = unescape_for_plain_text(out)
         return out
@@ -458,10 +563,12 @@ def md_to_markdown(raw_text: str) -> str:
     try:
         if not raw_text:
             return ""
-        pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+        # Normalize bare `[Label] https://...` lines into Markdown links so
+        # they become clickable anchors (idempotent for existing links).
+        raw_text = normalize_bracket_links(raw_text)
         out_parts = []
         last = 0
-        for m in pattern.finditer(raw_text):
+        for m in _MD_LINK_RE.finditer(raw_text):
             start, end = m.span()
             non = raw_text[last:start]
             out_parts.append(escape_markdown(non))
@@ -487,14 +594,18 @@ def md_to_html(raw_text: str, one_per_line: bool = False) -> str:
     try:
         if not raw_text:
             return ""
-        pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+        # Normalize bare `[Label] https://...` lines into Markdown links so
+        # they become clickable anchors (idempotent for existing links).
+        raw_text = normalize_bracket_links(raw_text)
         out_parts = []
         last = 0
-        for m in pattern.finditer(raw_text):
+        for m in _MD_LINK_RE.finditer(raw_text):
             start, end = m.span()
             non = raw_text[last:start]
             out_parts.append(html.escape(non))
-            label = m.group(1)
+            # Remove any stray Telegram-Markdown backslash-escapes so labels
+            # render literally in HTML (e.g. `Tom\_Torero` -> `Tom_Torero`).
+            label = unescape_for_plain_text(m.group(1))
             url = m.group(2)
             label_esc = html.escape(label)
             try:
@@ -612,8 +723,7 @@ def render_paginated_page(page: dict, query_override: str | None = None, max_msg
 
     try:
         # plain extraction (labels only) for truncation/fallback
-        pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-        content_plain = pattern.sub(r"\1", content_raw)
+        content_plain = _MD_LINK_RE.sub(r"\1", content_raw)
         content_plain = unescape_for_plain_text(content_plain)
     except Exception:
         content_plain = unescape_for_plain_text(content_raw)

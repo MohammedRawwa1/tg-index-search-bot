@@ -145,6 +145,43 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
             pass
 
 
+async def safe_edit_or_send(client_obj: Client, edit_msg, orig_message: Message, text: str, **kwargs):
+    """Try to edit `edit_msg`; on failure send a new message as a reply to `orig_message`.
+
+    This ensures the user always receives feedback when edit fails (for example
+    if the original message was deleted or editing is not permitted).
+    """
+    try:
+        if edit_msg:
+            await edit_msg.edit_text(text, **kwargs)
+            return
+    except Exception:
+        logger.exception("safe_edit_or_send: edit_text failed, will try sending new message")
+
+    try:
+        if orig_message:
+            await orig_message.reply_text(text, **kwargs)
+            return
+    except Exception:
+        logger.exception("safe_edit_or_send: reply_text failed, will try client.send_message")
+
+    try:
+        # fallback: send directly to chat id if available
+        chat_id = None
+        try:
+            if orig_message and getattr(orig_message, "chat", None):
+                chat_id = orig_message.chat.id
+            elif edit_msg and getattr(edit_msg, "chat", None):
+                chat_id = edit_msg.chat.id
+        except Exception:
+            chat_id = None
+
+        if chat_id is not None:
+            await client_obj.send_message(chat_id, text, **kwargs)
+    except Exception:
+        logger.exception("safe_edit_or_send: final fallback send_message failed")
+
+
 DEFAULT_PER_PAGE = 5
 _LAST_SEARCH = {}
 _COOLDOWN = settings.SEARCH_COOLDOWN
@@ -400,7 +437,7 @@ def register_search_handlers(client: Client, mongo):
         store = getattr(client, "_internal_page_store", None)
 
         if not store:
-            await searching.edit_text("No page store available")
+            await safe_edit_or_send(client, searching, message, "No page store available")
             return
 
         pages = await save_pages(
@@ -412,7 +449,7 @@ def register_search_handlers(client: Client, mongo):
         )
 
         if not pages:
-            await searching.edit_text("No results")
+            await safe_edit_or_send(client, searching, message, "No results")
             return
 
         # -------------------------------
@@ -465,11 +502,16 @@ def register_search_handlers(client: Client, mongo):
             except Exception:
                 pass
 
-        await searching.edit_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(kb),
-            parse_mode="Markdown"
-        )
+        try:
+            await searching.edit_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(kb),
+                parse_mode="Markdown"
+            )
+        except Exception:
+            # If editing the temporary 'searching' message fails, send the
+            # rendered page as a fresh message so the user still receives it.
+            await safe_edit_or_send(client, searching, message, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
     @client.on_message(filters.command("export"))
     async def export_all_handler(client: Client, message: Message):
@@ -548,9 +590,20 @@ def register_search_handlers(client: Client, mongo):
     # 📄 CALLBACK HANDLER
     # -------------------------------
     @client.on_callback_query()
-    async def callbacks(client: Client, cq: CallbackQuery):
+    async def merged_callback_handler(client: Client, cq: CallbackQuery):
         data = cq.data or ""
 
+        # Admin callbacks (C| and A|)
+        if data.startswith("C|") or data.startswith("A|"):
+            try:
+                from app.handlers.admin import handle_admin_callback
+                await handle_admin_callback(client, cq)
+            except Exception as exc:
+                logger.exception("admin callback dispatch failed: {}", exc)
+                await cq.answer("Admin callback error", show_alert=True)
+            return
+
+        # Search internal page navigation (IP|)
         if data.startswith("IP|"):
             page_id = data.split("|", 1)[1]
             store = getattr(client, "_internal_page_store", None)
@@ -572,3 +625,7 @@ def register_search_handlers(client: Client, mongo):
                 parse_mode="Markdown"
             )
             await cq.answer()
+            return
+
+        # Unknown callback
+        await cq.answer("Unknown callback", show_alert=True)
