@@ -9,7 +9,6 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from app.config.settings import settings
 from app.handlers.indexer import backfill_history
 from app.utils.logger import logger
-from motor.motor_asyncio import AsyncIOMotorClient
 
 
 def _is_owner(user_id: Optional[int]) -> bool:
@@ -124,18 +123,45 @@ def register_admin_handlers(client: Client, mongo):
             await message.reply_text("Unauthorized")
             return
 
-        kb = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("Delete", callback_data="C|delete"),
-                    InlineKeyboardButton("Drop", callback_data="C|drop"),
-                ],
-                [InlineKeyboardButton("Cancel", callback_data="C|cancel")],
-            ]
-        )
+        # Type-to-confirm guard: only an explicit typed confirmation wipes.
+        parts = message.text.split(maxsplit=2)
+        action = parts[1].lower() if len(parts) > 1 else ""
+        sub = parts[2].lower() if len(parts) > 2 else ""
+
+        if action == "confirm" and sub in ("delete", "drop"):
+            if mongo is None:
+                await message.reply_text("DB unavailable — nothing cleared.")
+                return
+            try:
+                if sub == "delete":
+                    mongo.db.get_collection("files").delete_many({})
+                    mongo.db.get_collection("index_state").delete_many({})
+                    await message.reply_text("Index cleared (files deleted).")
+                else:
+                    try:
+                        mongo.db.drop_collection("files")
+                    except Exception:
+                        pass
+                    try:
+                        mongo.db.drop_collection("index_state")
+                    except Exception:
+                        pass
+                    await message.reply_text("Collections dropped.")
+            except Exception as exc:
+                logger.exception("/clear_all confirm failed: {}", exc)
+                await message.reply_text(f"Clear failed: {exc}")
+            return
+
+        if action == "cancel":
+            await message.reply_text("Cancelled — nothing was cleared.")
+            return
+
         await message.reply_text(
-            "Clear ALL indexed files?\nDelete = safer, Drop = faster.",
-            reply_markup=kb,
+            "⚠️ Clear ALL indexed files?\n\n"
+            "To confirm, type exactly one of:\n"
+            "/clear_all confirm delete   (safer: delete docs)\n"
+            "/clear_all confirm drop     (faster: drop collections)\n\n"
+            "Nothing has been deleted."
         )
 
 
@@ -155,74 +181,14 @@ async def handle_admin_callback(client: Client, cq: CallbackQuery):
         return
 
     # --- CLEAR ACTIONS (C|) ---
+    # The destructive actions are only performed via the typed
+    # `/clear_all confirm delete|drop` command. A button tap only reminds
+    # the owner how to confirm, so an accidental tap never wipes the index.
     if data.startswith("C|"):
-        action = data.split("|", 1)[1]
-
         try:
-            performed = False
-            if mongo is not None:
-                try:
-                    if action == "delete":
-                        mongo.db.get_collection("files").delete_many({})
-                        mongo.db.get_collection("index_state").delete_many({})
-                    elif action == "drop":
-                        try:
-                            mongo.db.drop_collection("files")
-                        except Exception:
-                            pass
-                        try:
-                            mongo.db.drop_collection("index_state")
-                        except Exception:
-                            pass
-                    performed = True
-                except Exception:
-                    logger.exception("Admin clear: attached mongo delete/drop failed, will fallback to async client")
-
-            if not performed:
-                # Fallback: temporary AsyncIOMotorClient
-                try:
-                    mclient = AsyncIOMotorClient(settings.MONGO_URI)
-                    mdb = mclient[settings.DB_NAME]
-                    if action == "delete":
-                        await mdb.get_collection("files").delete_many({})
-                        await mdb.get_collection("index_state").delete_many({})
-                    elif action == "drop":
-                        try:
-                            await mdb.drop_collection("files")
-                        except Exception:
-                            pass
-                        try:
-                            await mdb.drop_collection("index_state")
-                        except Exception:
-                            pass
-                    try:
-                        mclient.close()
-                    except Exception:
-                        pass
-                    performed = True
-                except Exception:
-                    logger.exception("Admin clear: fallback AsyncIOMotorClient operation failed")
-
-            # Only report success if the operation actually ran; otherwise tell
-            # the user the action failed instead of lying about it.
-            if action == "delete":
-                if performed:
-                    await cq.message.edit_text("Documents deleted.")
-                    await cq.answer("Deleted")
-                else:
-                    await cq.answer("Failed to delete", show_alert=True)
-            elif action == "drop":
-                if performed:
-                    await cq.message.edit_text("Collections dropped.")
-                    await cq.answer("Dropped")
-                else:
-                    await cq.answer("Failed to drop", show_alert=True)
-            else:
-                await cq.message.edit_text("Cancelled.")
-                await cq.answer()
-        except Exception as e:
-            logger.exception("Admin clear callback failed: {}", e)
-            await cq.answer("Error", show_alert=True)
+            await cq.answer("Type /clear_all confirm delete (or confirm drop) to proceed", show_alert=True)
+        except Exception:
+            pass
         return
 
     # --- ADMIN PANEL ACTIONS (A|) ---

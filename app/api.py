@@ -222,10 +222,10 @@ async def startup():
         # Ensure indexes that speed up eager/normalized lookups
         try:
             try:
-                await app.state.db.get_collection("files").create_index([("filename_norm", 1)], background=True)
-                logger.info("Ensured index files(filename_norm)")
+                await app.state.db.get_collection("files").create_index([("norm_filename", 1)], background=True)
+                logger.info("Ensured index files(norm_filename)")
             except Exception:
-                logger.exception("Failed to create index files(filename_norm)")
+                logger.exception("Failed to create index files(norm_filename)")
             try:
                 # multikey index on trigrams array to accelerate trigram candidate queries
                 await app.state.db.get_collection("files").create_index([("trigrams", 1)], background=True)
@@ -426,8 +426,10 @@ async def startup():
         pass
 
     # Automatic background backfill worker (optional)
-    # Only run backfill when both BACKFILL_AUTO and RUN_BOT_IN_API are enabled
-    if run_bots and getattr(settings, "BACKFILL_AUTO", False):
+    # The worker creates its own Pyrogram client, so it runs whenever
+    # BACKFILL_AUTO is enabled. It does NOT require RUN_BOT_IN_API (which
+    # only controls whether this process also starts the BotManager clients).
+    if getattr(settings, "BACKFILL_AUTO", False):
         # derive chat list
         chat_list = []
         if getattr(settings, "BACKFILL_CHAT_IDS", None):
@@ -979,136 +981,22 @@ async def telegram_webhook(token: str, update: dict):
                     except Exception:
                         pass
                     return JSONResponse(status_code=200, content={"ok": True})
-            # Admin callbacks: handle clear_all actions from inline buttons
-            # e.g. C|delete, C|drop, C|cancel
+            # Admin clear_all callbacks (C|): the destructive actions are only
+            # performed via the typed `/clear_all confirm delete|drop` command.
+            # A button tap only reminds the owner how to confirm, so an
+            # accidental tap can never wipe the index.
             if data.startswith("C|"):
-                action = data.split("|", 1)[1]
                 if await _reject_callback_if_not_owner(token, cq):
                     return JSONResponse(status_code=200, content={"ok": True})
-
                 try:
-                    db = getattr(app.state, "db", None)
-                    msg = cq.get("message")
-                    if action == "delete":
-                        # Try to delete via app state DB if available
-                        if db is not None:
-                            try:
-                                await db.get_collection("files").delete_many({})
-                                await db.get_collection("index_state").delete_many({})
-                            except Exception:
-                                logger.exception("API clear_all: delete operation failed using app.state.db")
-                        else:
-                            # Fallback: create a temporary AsyncIOMotorClient to perform deletion
-                            try:
-                                tmp_client = AsyncIOMotorClient(settings.MONGO_URI)
-                                tmp_db = tmp_client[settings.DB_NAME]
-                                try:
-                                    await tmp_db.get_collection("files").delete_many({})
-                                    await tmp_db.get_collection("index_state").delete_many({})
-                                except Exception:
-                                    logger.exception("API clear_all: delete operation failed using fallback motor client")
-                                try:
-                                    tmp_client.close()
-                                except Exception:
-                                    pass
-                            except Exception:
-                                logger.exception("API clear_all: could not create fallback motor client")
-                        edit_url = f"https://api.telegram.org/bot{token}/editMessageText"
-                        payload = {"text": "Documents deleted."}
-                        if msg and msg.get("chat"):
-                            payload["chat_id"] = msg.get("chat", {}).get("id")
-                            payload["message_id"] = msg.get("message_id")
-                        else:
-                            imid = cq.get("inline_message_id")
-                            if imid:
-                                payload["inline_message_id"] = imid
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                await client.post(edit_url, json=payload, timeout=10)
-                        except Exception:
-                            pass
-                        try:
-                            await _answer_callback(token, cq.get("id"), text="Deleted")
-                        except Exception:
-                            pass
-                    elif action == "drop":
-                        if db is not None:
-                            try:
-                                try:
-                                    await db.drop_collection("files")
-                                except Exception:
-                                    pass
-                                try:
-                                    await db.drop_collection("index_state")
-                                except Exception:
-                                    pass
-                            except Exception:
-                                logger.exception("API clear_all: drop operation failed using app.state.db")
-                        else:
-                            # Fallback: create a temporary AsyncIOMotorClient
-                            try:
-                                tmp_client = AsyncIOMotorClient(settings.MONGO_URI)
-                                tmp_db = tmp_client[settings.DB_NAME]
-                                try:
-                                    try:
-                                        await tmp_db.drop_collection("files")
-                                    except Exception:
-                                        pass
-                                    try:
-                                        await tmp_db.drop_collection("index_state")
-                                    except Exception:
-                                        pass
-                                except Exception:
-                                    logger.exception("API clear_all: drop operation failed using fallback motor client")
-                                try:
-                                    tmp_client.close()
-                                except Exception:
-                                    pass
-                            except Exception:
-                                logger.exception("API clear_all: could not create fallback motor client for drop")
-                        edit_url = f"https://api.telegram.org/bot{token}/editMessageText"
-                        payload = {"text": "Collections dropped."}
-                        if msg and msg.get("chat"):
-                            payload["chat_id"] = msg.get("chat", {}).get("id")
-                            payload["message_id"] = msg.get("message_id")
-                        else:
-                            imid = cq.get("inline_message_id")
-                            if imid:
-                                payload["inline_message_id"] = imid
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                await client.post(edit_url, json=payload, timeout=10)
-                        except Exception:
-                            pass
-                        try:
-                            await _answer_callback(token, cq.get("id"), text="Dropped")
-                        except Exception:
-                            pass
-                    else:
-                        edit_url = f"https://api.telegram.org/bot{token}/editMessageText"
-                        payload = {"text": "Cancelled."}
-                        if msg and msg.get("chat"):
-                            payload["chat_id"] = msg.get("chat", {}).get("id")
-                            payload["message_id"] = msg.get("message_id")
-                        else:
-                            imid = cq.get("inline_message_id")
-                            if imid:
-                                payload["inline_message_id"] = imid
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                await client.post(edit_url, json=payload, timeout=10)
-                        except Exception:
-                            pass
-                        try:
-                            await _answer_callback(token, cq.get("id"), text="Cancelled")
-                        except Exception:
-                            pass
-                except Exception as e:
-                    logger.exception("API clear callback failed: {}", e)
-                    try:
-                        await _answer_callback(token, cq.get("id"), text="Error", show_alert=True)
-                    except Exception:
-                        pass
+                    await _answer_callback(
+                        token,
+                        cq.get("id"),
+                        text="Type /clear_all confirm delete (or confirm drop) to proceed",
+                        show_alert=True,
+                    )
+                except Exception:
+                    pass
                 return JSONResponse(status_code=200, content={"ok": True})
 
     except Exception:
@@ -1192,17 +1080,50 @@ async def telegram_webhook(token: str, update: dict):
         if await _reject_if_not_owner(token, chat_id):
             return {"ok": True}
 
-        kb = [
-            [
-                {"text": "Delete", "callback_data": "C|delete"},
-                {"text": "Drop", "callback_data": "C|drop"},
-            ],
-            [{"text": "Cancel", "callback_data": "C|cancel"}],
-        ]
-        try:
-            await _send_tg(token, chat_id, "Clear ALL indexed files?\nDelete = safer, Drop = faster.", reply_markup=kb)
-        except Exception:
-            logger.exception("Failed to send clear_all confirmation from API webhook")
+        # Type-to-confirm guard: an accidental button tap must never wipe the
+        # index. Only an explicit typed confirmation performs the action.
+        parts = text.split(maxsplit=2)
+        action = parts[1].lower() if len(parts) > 1 else ""
+        sub = parts[2].lower() if len(parts) > 2 else ""
+
+        if action == "confirm" and sub in ("delete", "drop"):
+            db = getattr(app.state, "db", None)
+            if db is None:
+                await _send_tg(token, chat_id, "DB unavailable — nothing cleared.")
+                return {"ok": True}
+            try:
+                if sub == "delete":
+                    await db.get_collection("files").delete_many({})
+                    await db.get_collection("index_state").delete_many({})
+                    await _send_tg(token, chat_id, "Index cleared (files deleted).")
+                else:
+                    try:
+                        await db.drop_collection("files")
+                    except Exception:
+                        pass
+                    try:
+                        await db.drop_collection("index_state")
+                    except Exception:
+                        pass
+                    await _send_tg(token, chat_id, "Collections dropped.")
+            except Exception as exc:
+                logger.exception("/clear_all confirm failed: {}", exc)
+                await _send_tg(token, chat_id, f"Clear failed: {exc}")
+            return {"ok": True}
+
+        if action == "cancel":
+            await _send_tg(token, chat_id, "Cancelled — nothing was cleared.")
+            return {"ok": True}
+
+        await _send_tg(
+            token,
+            chat_id,
+            "⚠️ Clear ALL indexed files?\n\n"
+            "To confirm, type exactly one of:\n"
+            "/clear_all confirm delete   (safer: delete docs)\n"
+            "/clear_all confirm drop     (faster: drop collections)\n\n"
+            "Nothing has been deleted.",
+        )
         return {"ok": True}
 
     if cmd == "/reindex":
@@ -3047,7 +2968,7 @@ async def public_page(request: Request, page_id: str):
                             # Fast path: lookup by normalized filename key (eager-indexed)
                             if fname_norm_input:
                                 try:
-                                    res = await coll.find({"filename_norm": fname_norm_input}, proj).sort(sort_order).to_list(length=5)
+                                    res = await coll.find({"norm_filename": fname_norm_input}, proj).sort(sort_order).to_list(length=5)
                                     if res:
                                         # prefer newest match
                                         return res[0]
@@ -3630,7 +3551,7 @@ async def api_search(
 
             if qnorm:
                 try:
-                    qn = {"filename_norm": qnorm}
+                    qn = {"norm_filename": qnorm}
                     if thread_id is not None:
                         try:
                             qn["message_thread_id"] = int(thread_id)
