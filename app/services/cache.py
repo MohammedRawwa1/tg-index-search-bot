@@ -28,8 +28,8 @@ class AsyncSearchCache:
         self._lock = asyncio.Lock()
 
     @staticmethod
-    def make_key(query: str, page: int = 1, per_page: int = 50, strict: bool = False, thread_id: Optional[int] = None) -> str:
-        s = f"q={query}|p={page}|r={per_page}|s={int(bool(strict))}|t={thread_id or ''}"
+    def make_key(query: str, page: int = 1, per_page: int = 50, strict: bool = False, thread_id: Optional[int] = None, allow_broad: bool = False) -> str:
+        s = f"q={query}|p={page}|r={per_page}|s={int(bool(strict))}|t={thread_id or ''}|b={int(bool(allow_broad))}"
         return hashlib.sha256(s.encode("utf-8", errors="ignore")).hexdigest()
 
     async def ensure_indexes(self):

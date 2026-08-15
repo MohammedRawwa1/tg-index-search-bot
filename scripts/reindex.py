@@ -37,23 +37,40 @@ except Exception:
     tokenize_filename = None
 
 
-def build_update_for_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+def build_update_for_doc(doc: Dict[str, Any], refresh_tokens: bool = False) -> Dict[str, Any]:
     title_tokens = doc.get("title_tokens") or []
     quality_tokens = doc.get("quality_tokens") or []
     codec_tokens = doc.get("codec_tokens") or []
     filename = doc.get("filename") or ""
 
-    # attempt to fill missing token groups from filename
-    if (not title_tokens) and filename and tokenize_filename:
+    # --refresh-tokens re-tokenizes EVERY doc from its stored filename so the
+    # current tokenizer rules (extension stripping, junk removal) apply to
+    # already-indexed documents WITHOUT a Telegram backfill. Legacy behavior
+    # (no flag) only fills missing token groups.
+    if filename and tokenize_filename and (refresh_tokens or not title_tokens):
         try:
             tk = tokenize_filename(filename)
-            title_tokens = tk.get("title_tokens", []) or title_tokens
-            quality_tokens = tk.get("quality_tokens", []) or quality_tokens
-            codec_tokens = tk.get("codec_tokens", []) or codec_tokens
-            if (not doc.get("year")) and tk.get("year"):
+            if refresh_tokens or not title_tokens:
+                title_tokens = tk.get("title_tokens", []) or title_tokens
+            if refresh_tokens or not quality_tokens:
+                quality_tokens = tk.get("quality_tokens", []) or quality_tokens
+            if refresh_tokens or not codec_tokens:
+                codec_tokens = tk.get("codec_tokens", []) or codec_tokens
+            if (refresh_tokens or not doc.get("year")) and tk.get("year"):
                 doc["year"] = tk.get("year")
         except Exception:
             pass
+
+    # normalized filename (dedupe key) + full-title phrase string used by
+    # Atlas Search phrase queries
+    try:
+        if title_tokens:
+            norm_filename = " ".join([str(t).lower() for t in title_tokens if t])
+        else:
+            norm_filename = doc.get("norm_filename") or str(filename).lower()
+    except Exception:
+        norm_filename = doc.get("norm_filename") or ""
+    title_phrase = norm_filename
 
     search_parts = []
     search_parts.extend([t for t in title_tokens if t])
@@ -79,6 +96,8 @@ def build_update_for_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         "quality_tokens": quality_tokens,
         "codec_tokens": codec_tokens,
         "year": doc.get("year"),
+        "norm_filename": norm_filename,
+        "title_phrase": title_phrase,
     }
     return update
 
@@ -88,7 +107,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=500, help="Bulk batch size")
     parser.add_argument("--dry-run", action="store_true", help="Don't write; just preview updates")
     parser.add_argument("--limit", type=int, default=0, help="Limit documents processed (0 = all)")
-    parser.add_argument("--skip-trigrams", action="store_true", help="Skip docs that already have trigrams")
+    parser.add_argument("--skip-trigrams", action="store_true", help="Skip docs that already have trigrams (ignored with --refresh-tokens)")
+    parser.add_argument("--refresh-tokens", action="store_true", help="Re-tokenize every doc from its stored filename (no Telegram backfill needed)")
 
     args = parser.parse_args()
 
@@ -133,10 +153,10 @@ def main():
 
     for doc in cursor:
         processed += 1
-        if args.skip_trigrams and doc.get("trigrams"):
+        if args.skip_trigrams and not args.refresh_tokens and doc.get("trigrams"):
             # skip docs that already have trigrams
             continue
-        upd = build_update_for_doc(doc)
+        upd = build_update_for_doc(doc, refresh_tokens=args.refresh_tokens)
         if args.dry_run:
             print(f"[DRY] _id={doc.get('_id')} -> search_text_len={len(upd.get('search_text',''))} trigrams={len(upd.get('trigrams',[]))}")
         else:

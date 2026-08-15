@@ -3,7 +3,18 @@ from datetime import datetime
 import re
 import os
 import asyncio
-from app.services.search_utils import make_trigrams, trigram_similarity, TRIGRAM_MAX
+from app.services.search_utils import make_trigrams, TRIGRAM_MAX
+from app.services.relevance import (
+    DEFAULT_MIN_TIER,
+    MIN_RESULTS,
+    NONE_TIER,
+    accepts_tier,
+    classify_match,
+    compute_search_score,
+    log_search_quality,
+    resolve_min_tier,
+    tier_priority,
+)
 from app.utils.logger import logger
 
 # Scoring weights (tunable)
@@ -142,6 +153,9 @@ class FileIndex:
             "thumbnail": thumbnail,
             "added_by": int(added_by) if added_by is not None else None,
             "norm_filename": norm_filename,
+            # full-title string for Atlas Search phrase queries (array fields
+            # cannot be phrase-matched across elements)
+            "title_phrase": norm_filename,
         }
 
         # Upsert
@@ -229,48 +243,39 @@ class FileIndex:
         per_page: int = 5,
         filters: Optional[Dict[str, Any]] = None,
         strict: bool = False,
+        allow_broad: bool = False,
     ) -> Dict[str, Any]:
-        """Ranked search with optional strict mode and improved scoring.
+        """Tiered, precision-first ranked search.
 
-        Adds phrase/exact boosts (useful for movie-title style queries), year
-        detection, and deduplication by filename. `strict=True` requires all
-        tokens to appear (higher precision).
+        Candidate stages run in precision order — exact token hits, then
+        prefix (autocomplete), then 1-edit trigram tolerance — and the
+        accepted minimum tier auto-broadens only when a tier returns fewer
+        than SEARCH_MIN_RESULTS results. The regex/broad fallback is NOT
+        part of the normal search path; it is only reachable via
+        `allow_broad=True` (scripts/admin use, never the bot handler).
         """
         if not tokens:
             return {"results": [], "total": 0}
 
-        # Prepare lowercase token set and query trigrams for candidate selection
-        token_set: Set[str] = set(t.lower() for t in tokens if t)
+        tokens = [t.lower() for t in tokens if t]
         q_text = query if query else " ".join(tokens)
         q_tris = make_trigrams(q_text or "", TRIGRAM_MAX)
 
-        # detect a 4-digit year in the query (common in movie searches)
-        year = None
-        try:
-            ym = re.search(r"\b(19|20)\d{2}\b", (q_text or ""))
-            if ym:
-                year = int(ym.group(0))
-                if str(year) in token_set:
-                    token_set.discard(str(year))
-        except Exception:
-            year = None
-
-        # Candidate selection: prefer title token hits or trigram overlap
-        if strict:
-            candidate_filter = {"title_tokens": {"$all": [t for t in tokens if t]}}
-        else:
-            candidate_filter = {"$or": [{"title_tokens": {"$in": tokens}}, {"trigrams": {"$in": q_tris}}]}
-
         # Apply optional filter clauses (chat/thread/ext/year/duration/size/resolution)
+        f_clauses = []
         if filters:
-            f_clauses = []
             try:
                 if "chat_id" in filters:
                     f_clauses.append({"chat_id": int(filters.get("chat_id"))})
                 if "message_thread_id" in filters:
                     f_clauses.append({"message_thread_id": int(filters.get("message_thread_id"))})
                 if "extension" in filters:
-                    f_clauses.append({"extension": str(filters.get("extension")).lower()})
+                    ext_val = filters.get("extension")
+                    if isinstance(ext_val, dict):
+                        # e.g. {"$nin": ["mp4", "mkv", ...]} from INDEX_VIDEO=false
+                        f_clauses.append({"extension": ext_val})
+                    else:
+                        f_clauses.append({"extension": str(ext_val).lower()})
                 if "year" in filters:
                     f_clauses.append({"year": int(filters.get("year"))})
                 if "min_duration" in filters:
@@ -287,144 +292,94 @@ class FileIndex:
             except Exception:
                 pass
 
+        def _with_filters(candidate_part: dict) -> dict:
             if f_clauses:
-                candidate_filter = {"$and": [candidate_filter, {"$and": f_clauses}]}
+                return {"$and": [candidate_part, {"$and": f_clauses}]}
+            return candidate_part
 
+        # start_tier: strict requires ALL tokens; otherwise the precision default
+        start_tier = "all" if strict else DEFAULT_MIN_TIER
+
+        classified: List[Dict[str, Any]] = []
+        seen = set()
+
+        def _classify(docs) -> None:
+            for doc in docs:
+                try:
+                    key = (int(doc.get("chat_id") or 0), int(doc.get("message_id") or 0))
+                except Exception:
+                    key = (0, 0)
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    match = classify_match(q_text, tokens, doc, q_tris, allow_broad=allow_broad)
+                except Exception:
+                    continue
+                if match.tier == NONE_TIER:
+                    continue
+                doc["_tier"] = match.tier
+                doc["_score"] = compute_search_score(doc, tokens, q_text, match, q_tris)
+                classified.append(doc)
+
+        def _count_at(tier: str) -> int:
+            return sum(1 for d in classified if accepts_tier(d.get("_tier", NONE_TIER), tier))
+
+        # Stage 1 — exact token candidates (title/quality/codec hits)
         try:
-            cursor = self._coll.find(candidate_filter).limit(self.CANDIDATE_LIMIT)
+            candidate_filter = _with_filters(
+                {"$or": [
+                    {"title_tokens": {"$in": tokens}},
+                    {"quality_tokens": {"$in": tokens}},
+                    {"codec_tokens": {"$in": tokens}},
+                ]}
+            )
+            _classify(self._coll.find(candidate_filter).limit(self.CANDIDATE_LIMIT))
         except Exception:
-            cursor = self._coll.find({}).limit(self.CANDIDATE_LIMIT)
+            pass
 
-        results: List[Dict[str, Any]] = []
-
-        def _score_doc(doc: Dict[str, Any]) -> float:
-            score = 0.0
-            doc_titles = [t.lower() for t in doc.get("title_tokens", [])]
-            doc_titles_set = set(doc_titles)
-            # title exact/token matches
-            title_matches = len(token_set & doc_titles_set)
-            score += title_matches * self.TITLE_WEIGHT
-            # quality/codec matches
-            q_matches = token_set & set(t.lower() for t in doc.get("quality_tokens", []))
-            score += len(q_matches) * self.QUALITY_WEIGHT
-            c_matches = token_set & set(t.lower() for t in doc.get("codec_tokens", []))
-            score += len(c_matches) * self.CODEC_WEIGHT
-
-            # phrase / exact title matching (movie-style queries)
+        # Stage 2 — prefix candidates (autocomplete), only when scarce
+        if not strict and _count_at("prefix") < MIN_RESULTS:
             try:
-                doc_title_str = " ".join(doc_titles).strip()
-                q_norm = re.sub(r"[^a-z0-9\s]", " ", (query or "").lower()).strip()
-                if q_norm and doc_title_str:
-                    if q_norm == doc_title_str:
-                        # exact title match: strong boost
-                        score += self.TITLE_WEIGHT * 6
-                    elif doc_title_str.startswith(q_norm):
-                        score += self.TITLE_WEIGHT * 3
-                    elif q_norm in doc_title_str:
-                        score += self.TITLE_WEIGHT * 2
+                or_clauses = []
+                for t in tokens:
+                    or_clauses.append(
+                        {"title_tokens": {"$elemMatch": {"$regex": f"^{re.escape(t)}", "$options": "i"}}}
+                    )
+                    or_clauses.append({"filename": {"$regex": f"^{re.escape(t)}", "$options": "i"}})
+                _classify(self._coll.find(_with_filters({"$or": or_clauses})).limit(self.CANDIDATE_LIMIT))
             except Exception:
                 pass
 
-            # year match (boost when query contained a year)
+        # Stage 3 — trigram candidates (1-edit typo tolerance), only when still scarce
+        if not strict and _count_at("typo") < MIN_RESULTS:
             try:
-                if year and doc.get("year") and int(doc.get("year")) == int(year):
-                    score += self.YEAR_WEIGHT * 2
-                else:
-                    # fallback: if year token appears among tokens
-                    if doc.get("year") and str(doc.get("year")) in token_set:
-                        score += self.YEAR_WEIGHT
+                if q_tris:
+                    _classify(
+                        self._coll.find(_with_filters({"trigrams": {"$in": q_tris}})).limit(self.CANDIDATE_LIMIT)
+                    )
             except Exception:
                 pass
 
-            # filename substring / exact match
-            qlower = re.sub(r"[^a-z0-9\s]", " ", (query or "").lower()).strip()
+        # Stage 4 — broad regex fallback (opt-in only; never in the normal path)
+        if _count_at("typo") < MIN_RESULTS and allow_broad:
             try:
-                fname = doc.get("filename", "") or ""
-                fname_norm = re.sub(r"[^a-z0-9\s]", " ", fname.lower()).strip()
-                if qlower and qlower and fname_norm and qlower == fname_norm:
-                    # exact filename match
-                    score += self.FILENAME_MATCH * 4
-                elif qlower and qlower in fname.lower():
-                    score += self.FILENAME_MATCH
+                _classify(self._prefix_fallback(tokens, limit=200))
             except Exception:
                 pass
 
-            # prefix boost
-            prefix_matches = sum(1 for tok in token_set if any(tt.startswith(tok) for tt in doc_titles_set))
-            score += prefix_matches * self.PREFIX_BOOST
-
-            # trigram similarity (fuzzy match)
-            try:
-                doc_tris = doc.get("trigrams", []) or []
-                tri_sim = trigram_similarity(q_tris, doc_tris)
-                score += tri_sim * self.TRIGRAM_WEIGHT
-            except Exception:
-                pass
-
-            # small length penalty for very long filenames
-            try:
-                fname_len = len(doc.get("filename", "") or "")
-                score -= fname_len / float(self.FNAME_LEN_PENALTY_DIV)
-            except Exception:
-                pass
-
-            # recency boost (recent items slightly preferred)
-            try:
-                ts = doc.get("timestamp")
-                if ts:
-                    if isinstance(ts, str):
-                        try:
-                            ts_dt = datetime.fromisoformat(ts)
-                        except Exception:
-                            ts_dt = None
-                    else:
-                        ts_dt = ts
-                    if ts_dt:
-                        age_seconds = (datetime.utcnow() - ts_dt).total_seconds()
-                        window = 30 * 24 * 3600  # 30 days
-                        recency = max(0.0, (window - age_seconds) / window)
-                        score += recency * self.RECENCY_WEIGHT
-            except Exception:
-                pass
-            return score
-
-        for doc in cursor:
-            try:
-                s = _score_doc(doc)
-                doc["_score"] = s
-                results.append(doc)
-            except Exception:
-                continue
-
-        # fallback to text search or prefix-based searches if no candidates found
-        if not results:
-            try:
-                if query:
-                    text_cursor = self._coll.find({"$text": {"$search": query}}).limit(self.CANDIDATE_LIMIT)
-                else:
-                    text_cursor = []
-                for doc in text_cursor:
-                    try:
-                        s = _score_doc(doc)
-                        doc["_score"] = s
-                        results.append(doc)
-                    except Exception:
-                        continue
-            except Exception:
-                fallback = self._prefix_fallback(tokens, limit=200)
-                for doc in fallback:
-                    try:
-                        s = _score_doc(doc)
-                        doc["_score"] = s
-                        results.append(doc)
-                    except Exception:
-                        continue
+        # decide the accepted minimum tier (precision default, broaden when scarce)
+        if strict:
+            min_tier_used = "all"
+        else:
+            min_tier_used = resolve_min_tier(classified, start_tier=start_tier)
+        accepted = [d for d in classified if accepts_tier(d.get("_tier", NONE_TIER), min_tier_used)]
 
         # deduplicate by filename (case-insensitive) keeping highest-scoring doc
         deduped = {}
         final_results = []
         try:
-            for doc in results:
+            for doc in accepted:
                 key = None
                 try:
                     # prefer normalized filename if present; fall back to computed norm
@@ -444,21 +399,34 @@ class FileIndex:
 
             final_results = list(deduped.values())
         except Exception:
-            final_results = results
+            final_results = accepted
 
-        # sort by score desc then timestamp desc
+        # sort by (tier priority, score, timestamp) desc — tier dominates
         try:
-            final_results.sort(key=lambda r: (r.get("_score", 0), r.get("timestamp")), reverse=True)
-            total = len(final_results)
-            start = (page - 1) * per_page
-            end = start + per_page
-            return {"results": final_results[start:end], "total": total}
+            final_results.sort(
+                key=lambda r: (tier_priority(r.get("_tier")), r.get("_score", 0.0), r.get("timestamp")),
+                reverse=True,
+            )
         except Exception:
-            results.sort(key=lambda r: (r.get("_score", 0), r.get("timestamp")), reverse=True)
-            total = len(results)
-            start = (page - 1) * per_page
-            end = start + per_page
-            return {"results": results[start:end], "total": total}
+            final_results.sort(key=lambda r: (r.get("_score", 0.0), r.get("timestamp")), reverse=True)
+
+        total = len(final_results)
+        start = (page - 1) * per_page
+        end = start + per_page
+
+        fuzzy_used = min_tier_used == "typo"
+        broad_used = min_tier_used == "broad" or allow_broad
+        log_search_quality(
+            q_text,
+            tokens,
+            final_results,
+            min_tier_used,
+            source="bot",
+            fuzzy_used=fuzzy_used,
+            broad_used=broad_used,
+        )
+
+        return {"results": final_results[start:end], "total": total}
 
     def bulk_upsert_files(self, docs: List[Dict[str, Any]]):
         """Perform bulk upsert of multiple file documents.
@@ -497,6 +465,12 @@ class FileIndex:
                         doc["norm_filename"] = self._normalize_filename(doc.get("filename") or "")
                 except Exception:
                     doc["norm_filename"] = ""
+            # full-title phrase string used by Atlas Search phrase queries
+            if "title_phrase" not in doc:
+                try:
+                    doc["title_phrase"] = doc.get("norm_filename") or ""
+                except Exception:
+                    doc["title_phrase"] = ""
 
         # Use pymongo bulk_write via raw collection API
         try:

@@ -9,6 +9,10 @@ _camel_re = re.compile(r'(?<!^)(?=[A-Z])')
 _token_re = re.compile(r'\d{3,4}p|\d{4}|[a-z0-9]+', re.IGNORECASE)
 
 # common release/junk tokens to strip (keeps numeric tokens like 1080p)
+# NOTE: media/document file extensions are included so they never pollute
+# `title_tokens` (which would otherwise break exact/phrase title matching
+# and produce noisy dedupe keys). Ambiguous words that can appear in real
+# titles (doc, ts, txt) are deliberately NOT stripped.
 _release_junk = set(
     [
         "bluray",
@@ -46,6 +50,39 @@ _release_junk = set(
         "720p",
         "1080p",
         "2160p",
+        # media extensions
+        "mkv",
+        "mp4",
+        "avi",
+        "mov",
+        "flv",
+        "wmv",
+        "m4v",
+        "mpeg",
+        "mpg",
+        "webm",
+        "3gp",
+        "m2ts",
+        "iso",
+        # document / ebook extensions
+        "epub",
+        "pdf",
+        "mobi",
+        "azw3",
+        "azw",
+        "azw4",
+        "djvu",
+        "fb2",
+        "rtf",
+        "pdb",
+        "docx",
+        "srt",
+        "sub",
+        # audio / other
+        "flac",
+        "ogg",
+        "opus",
+        "apk",
     ]
 )
 

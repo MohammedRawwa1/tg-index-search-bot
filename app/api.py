@@ -9,6 +9,16 @@ import certifi
 import ssl
 from app.config.settings import settings
 from app.services.tokenizer import tokenize_query
+from app.services.relevance import (
+    DEFAULT_MIN_TIER,
+    NONE_TIER,
+    accepts_tier,
+    classify_match,
+    compute_search_score,
+    log_search_quality,
+    resolve_min_tier,
+    tier_priority,
+)
 import sys
 import httpx
 import html
@@ -3349,6 +3359,7 @@ async def api_search(
     save_telegraph: bool = Query(False),
     thread_id: int | None = Query(None),
     strict: bool = Query(False),
+    allow_broad: bool = Query(False),
 ):
     tokens = tokenize_query(q)
     if not tokens:
@@ -3359,7 +3370,7 @@ async def api_search(
     cache_key = None
     if cache:
         try:
-            cache_key = cache.make_key(q, page, per_page, strict, thread_id)
+            cache_key = cache.make_key(q, page, per_page, strict, thread_id, allow_broad)
             cached = await cache.get(cache_key)
             if cached and isinstance(cached, dict):
                 return cached
@@ -3440,16 +3451,19 @@ async def api_search(
             w_fname = _get_w("RANK_FILENAME_MATCH", FILENAME_MATCH)
 
             fuzzy_enabled = os.getenv("ATLAS_SEARCH_FUZZY", "true").lower() in ("1", "true", "yes")
-            fuzzy_obj = {"maxEdits": 1, "prefixLength": 1} if fuzzy_enabled else None
 
+            # Precision-first compound: exact phrase + token text WITHOUT fuzzy,
+            # plus a single low-boost fuzzy clause on the aggregated search_text
+            # as the typo tier. Fuzzy is never attached to precision clauses.
             should = []
-            # title tokens (high precision)
+            # exact phrase on the full-title string (strongest) — phrase
+            # cannot match across array elements, so it targets title_phrase
+            should.append({
+                "phrase": {"query": q, "path": "title_phrase", "score": {"boost": {"value": w_title * 3.0}}}
+            })
+            # title tokens (high precision, exact tokens only)
             should.append({
                 "text": {"query": q, "path": "title_tokens", "score": {"boost": {"value": w_title}}}
-            })
-            # aggregated search_text (broad fuzzy match)
-            should.append({
-                "text": {"query": q, "path": "search_text", "score": {"boost": {"value": w_trigram}}}
             })
             # filename exact / substring
             should.append({
@@ -3458,25 +3472,22 @@ async def api_search(
             # quality and codec
             should.append({"text": {"query": q, "path": "quality_tokens", "score": {"boost": {"value": w_quality}}}})
             should.append({"text": {"query": q, "path": "codec_tokens", "score": {"boost": {"value": w_codec}}}})
+            # typo tier: fuzzy only on the aggregated search_text, low boost
+            fuzzy_clause = {
+                "text": {
+                    "query": q,
+                    "path": "search_text",
+                    "score": {"boost": {"value": max(1.0, w_trigram * 0.2)}},
+                }
+            }
+            if fuzzy_enabled:
+                fuzzy_clause["text"]["fuzzy"] = {"maxEdits": 1, "prefixLength": 2}
+            should.append(fuzzy_clause)
 
-            # attach fuzzy where supported
-            if fuzzy_obj:
-                for s in should:
-                    try:
-                        tx = s.get("text")
-                        if tx is not None:
-                            tx["fuzzy"] = fuzzy_obj
-                    except Exception:
-                        pass
-
-            # If strict query behavior requested, require more matches.
-            try:
-                if strict:
-                    min_should = max(1, min(len(tokens), 5))
-                else:
-                    min_should = 1
-            except Exception:
-                min_should = 1
+            # minimumShouldMatch stays 1: multi-token queries like
+            # "breaking bad season 3" must still surface docs matching only the
+            # important title tokens (tier filtering happens in Python below).
+            min_should = 1
 
             search_stage = {"$search": {"compound": {"should": should, "minimumShouldMatch": min_should}}}
 
@@ -3613,99 +3624,40 @@ async def api_search(
             logger.exception("api_search: eager DB candidate query failed: {}", exc)
             docs = []
 
-    # If no candidate results, try MongoDB text search on `search_text` field
-    if not docs:
+    # Broad regex fallback is NOT part of the normal path — only when explicitly requested.
+    if not docs and allow_broad:
         try:
-            # larger text search depth
-            docs = await coll.find({"$text": {"$search": q}}, projection).to_list(length=2000)
-        except Exception:
+            or_clauses = []
+            for t in tokens:
+                or_clauses.append({"title_tokens": {"$elemMatch": {"$regex": f"^{re.escape(t)}", "$options": "i"}}})
+                or_clauses.append({"filename": {"$regex": re.escape(t), "$options": "i"}})
+            docs = await coll.find({"$or": or_clauses}, projection).to_list(length=500)
+        except Exception as exc:
+            logger.exception("api_search: broad fallback DB query failed: {}", exc)
             docs = []
 
-    # Score and rank results
-    results = []
-    qlower = q.lower()
-    # If docs already contain a DB-computed `score` (Atlas Search), reuse it.
-    if any(d.get("score") is not None for d in docs):
-        for doc in docs:
-            try:
-                doc["_score"] = float(doc.get("score") or 0.0)
-            except Exception:
-                doc["_score"] = 0.0
-            results.append(doc)
-    else:
-        # reuse query trigrams (already computed)
-        # normalize query for phrase/filename matching
+    # Precision-first tier filtering + scoring (shared relevance engine).
+    try:
+        q_tris = make_trigrams(q or "", TRIGRAM_MAX)
+    except Exception:
+        q_tris = []
+    start_tier = "all" if strict else DEFAULT_MIN_TIER
+    classified = []
+    for doc in docs:
         try:
-            q_norm = re.sub(r"[^a-z0-9\s]", " ", qlower).strip()
+            match = classify_match(q, tokens, doc, q_tris, allow_broad=allow_broad)
+            if match.tier == NONE_TIER:
+                continue
+            doc["_tier"] = match.tier
+            doc["_score"] = compute_search_score(doc, tokens, q, match, q_tris)
+            classified.append(doc)
         except Exception:
-            q_norm = qlower
+            continue
+    # strict mode never broadens below "all" (same as the bot handler path)
+    min_tier = "all" if strict else resolve_min_tier(classified, start_tier=start_tier)
+    results = [d for d in classified if accepts_tier(d.get("_tier", NONE_TIER), min_tier)]
 
-        for doc in docs:
-            score = 0.0
-            doc_titles = [t.lower() for t in doc.get("title_tokens", [])]
-            matched = sum(1 for t in tokens if t.lower() in doc_titles)
-            score += matched * TITLE_WEIGHT
-            # phrase / exact title boosts
-            try:
-                doc_title_str = " ".join(doc_titles).strip()
-                if q_norm and doc_title_str:
-                    if q_norm == doc_title_str:
-                        score += TITLE_WEIGHT * 6
-                    elif doc_title_str.startswith(q_norm):
-                        score += TITLE_WEIGHT * 3
-                    elif q_norm in doc_title_str:
-                        score += TITLE_WEIGHT * 2
-            except Exception:
-                pass
-            for qt in doc.get("quality_tokens", []):
-                if qt and any(qt == t.lower() for t in tokens):
-                    score += QUALITY_WEIGHT
-            for cd in doc.get("codec_tokens", []):
-                if cd and any(cd == t.lower() for t in tokens):
-                    score += CODEC_WEIGHT
-            if doc.get("year") and any(str(doc.get("year")) == t for t in tokens):
-                score += YEAR_WEIGHT
-            if qlower and qlower in doc.get("filename", "").lower():
-                score += FILENAME_MATCH
-            fname_len = len(doc.get("filename", ""))
-            # prefix boost
-            for t in tokens:
-                if any(tt.startswith(t.lower()) for tt in doc_titles):
-                    score += PREFIX_BOOST
-            # trigram similarity
-            try:
-                tri_sim = trigram_similarity(q_tris, doc.get("trigrams", []))
-                score += tri_sim * TRIGRAM_WEIGHT
-            except Exception:
-                pass
-            score -= fname_len / FNAME_LEN_PENALTY_DIV
-            doc["_score"] = score
-            results.append(doc)
-
-    # fallback: prefix/regex if still no results
-    if not results:
-        or_clauses = []
-        for t in tokens:
-            or_clauses.append({"title_tokens": {"$elemMatch": {"$regex": f'^{t}', "$options": "i"}}})
-            or_clauses.append({"filename": {"$regex": f'{t}', "$options": "i"}})
-        try:
-            docs2 = await coll.find({"$or": or_clauses}, projection).to_list(length=500)
-        except Exception as exc:
-            logger.exception("api_search: fallback DB query failed: {}", exc)
-            return {"results": [], "total": 0}
-        for doc in docs2:
-            score = 0
-            doc_titles = [t.lower() for t in doc.get("title_tokens", [])]
-            matched = sum(1 for t in tokens if any(tt.startswith(t.lower()) for tt in doc_titles))
-            score += matched * (TITLE_WEIGHT - 2)
-            if qlower and qlower in doc.get("filename", "").lower():
-                score += 2
-            fname_len = len(doc.get("filename", ""))
-            score -= fname_len / 300.0
-            doc["_score"] = score
-            results.append(doc)
-
-    results.sort(key=lambda r: (r.get("_score", 0), r.get("timestamp")), reverse=True)
+    results.sort(key=lambda r: (tier_priority(r.get("_tier")), r.get("_score", 0.0), r.get("timestamp")), reverse=True)
     # If we computed `total` earlier (Atlas count), prefer it; otherwise derive from results
     total = total if isinstance(total, int) and total > 0 else len(results)
     # When using Atlas Search the pipeline already applied skip/limit; preserve results as-is.
@@ -3720,6 +3672,16 @@ async def api_search(
         start = (page - 1) * per_page
         end = start + per_page
         page_results = results[start:end]
+
+    log_search_quality(
+        q,
+        tokens,
+        results,
+        min_tier,
+        source="api",
+        fuzzy_used=min_tier == "typo",
+        broad_used=min_tier == "broad" or allow_broad,
+    )
 
     # Support markdown output for easy export/pasting into chats
     if str(output_format).lower() in ("md", "markdown"):
@@ -3951,23 +3913,19 @@ async def search_stream(
     w_codec = _get_w("RANK_CODEC_WEIGHT", CODEC_WEIGHT)
 
     fuzzy_enabled = os.getenv("ATLAS_SEARCH_FUZZY", "true").lower() in ("1", "true", "yes")
-    fuzzy_obj = {"maxEdits": 1, "prefixLength": 1} if fuzzy_enabled else None
 
+    # Precision-first compound: no fuzzy on the precision clauses; a single
+    # low-boost fuzzy clause on search_text acts as the typo tier.
     should = []
+    should.append({"phrase": {"query": q, "path": "title_phrase", "score": {"boost": {"value": w_title * 3.0}}}})
     should.append({"text": {"query": q, "path": "title_tokens", "score": {"boost": {"value": w_title}}}})
-    should.append({"text": {"query": q, "path": "search_text", "score": {"boost": {"value": w_trigram}}}})
     should.append({"text": {"query": q, "path": "filename", "score": {"boost": {"value": w_fname}}}})
     should.append({"text": {"query": q, "path": "quality_tokens", "score": {"boost": {"value": w_quality}}}})
     should.append({"text": {"query": q, "path": "codec_tokens", "score": {"boost": {"value": w_codec}}}})
-
-    if fuzzy_obj:
-        for s in should:
-            try:
-                tx = s.get("text")
-                if tx is not None:
-                    tx["fuzzy"] = fuzzy_obj
-            except Exception:
-                pass
+    fuzzy_clause = {"text": {"query": q, "path": "search_text", "score": {"boost": {"value": max(1.0, w_trigram * 0.2)}}}}
+    if fuzzy_enabled:
+        fuzzy_clause["text"]["fuzzy"] = {"maxEdits": 1, "prefixLength": 2}
+    should.append(fuzzy_clause)
 
     search_stage = {"$search": {"compound": {"should": should, "minimumShouldMatch": 1}}}
 
@@ -4025,7 +3983,8 @@ async def search_stream(
             from app.services.search_utils import make_trigrams, TRIGRAM_MAX
 
             q_tris = make_trigrams(q or "", TRIGRAM_MAX)
-            candidate_filter = {"$or": [{"title_tokens": {"$in": [q]}}, {"trigrams": {"$in": q_tris}}]}
+            stream_tokens = tokenize_query(q)
+            candidate_filter = {"$or": [{"title_tokens": {"$in": stream_tokens}}, {"trigrams": {"$in": q_tris}}]}
             if thread_id is not None:
                 try:
                     tid = int(thread_id)
