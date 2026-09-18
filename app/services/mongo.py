@@ -8,15 +8,19 @@ from app.utils.logger import logger
 
 
 class MongoService:
-    def __init__(self, uri: str, db_name: str = "tg_index", connect_timeout_ms: int = 2000):
+    def __init__(
+        self,
+        uri: str,
+        db_name: str = "tg_index",
+        connect_timeout_ms: int = 15000,
+    ):
         self.uri = uri
         self.db_name = db_name
-        self.connect_timeout_ms = int(connect_timeout_ms or 2000)
+        self.connect_timeout_ms = int(connect_timeout_ms or 15000)
         self.client: Optional[MongoClient] = None
         self.db = None
 
     def connect(self):
-        import os
         def _uses_tls(uri: str) -> bool:
             u = uri.lower()
             return (
@@ -25,23 +29,52 @@ class MongoService:
                 or "ssl=true" in u
                 or "mongodb.net" in u
             )
+
         try:
-            kwargs = dict(serverSelectionTimeoutMS=self.connect_timeout_ms, maxPoolSize=200, minPoolSize=10)
+            if not self.uri:
+                raise ValueError("MongoDB URI is empty")
+
+            logger.info("Connecting to MongoDB...")
+
+            kwargs = {
+                "serverSelectionTimeoutMS": 15000,
+                "connectTimeoutMS": 15000,
+                "maxPoolSize": 50,
+                "minPoolSize": 0,
+            }
+
             if _uses_tls(self.uri):
-                kwargs.update({"tls": True, "tlsCAFile": certifi.where()})
+                kwargs.update({
+                    "tls": True,
+                    "tlsCAFile": certifi.where(),
+                })
+
             self.client = MongoClient(self.uri, **kwargs)
-            self.client.admin.command("ping")
+
+            result = self.client.admin.command("ping")
+            logger.info("MongoDB ping successful: {}", result)
+
             self.db = self.client[self.db_name]
-            logger.info("MongoDB connected")
-        except PyMongoError as exc:
-            logger.error("Mongo connect failed: {}", exc)
+
+            logger.info(
+                "MongoDB connected to database: {}",
+                self.db_name,
+            )
+
+        except Exception as exc:
             self.client = None
             self.db = None
-            raise RuntimeError(f"MongoDB connection failed: {exc}") from exc
+
+            logger.exception("MongoDB connection failed")
+
+            raise RuntimeError(
+                f"MongoDB connection failed: {exc}"
+            ) from exc
 
     def _ensure_connected(self):
         if self.client is None or self.db is None:
             self.connect()
+
 
     def _build_md_link(self, doc: Dict[str, Any]) -> str:
         try:
@@ -153,118 +186,63 @@ class MongoService:
         )
 
     def ensure_indexes(self) -> None:
-        """Ensure common MongoDB indexes used by the application.
+        self._ensure_connected()
 
-        This is a synchronous helper used by scripts and startup paths
-        that rely on the presence of particular indexes for efficient
-        queries and sorting.
-        """
-        try:
-            self._ensure_connected()
-        except Exception:
-            logger.exception("ensure_indexes: cannot connect to MongoDB")
-            return
+        col = self.db.get_collection("files")
 
-        try:
-            col = self.db.get_collection("files")
-            # Compound index to support sorting within a chat by thread/timestamp
-            try:
-                col.create_index([("chat_id", 1), ("message_thread_id", 1), ("timestamp", -1)], background=True)
-                logger.info("Ensured compound index files(chat_id,message_thread_id,timestamp)")
-            except Exception:
-                logger.exception("Failed to create compound index on files collection")
+        col.create_index([
+            ("chat_id", 1),
+            ("message_thread_id", 1),
+            ("timestamp", -1),
+        ])
 
-            # Unique constraint for chat_id + message_id to make upserts efficient
-            try:
-                col.create_index([("chat_id", 1), ("message_id", 1)], unique=True, background=True)
-                logger.info("Ensured unique index files(chat_id,message_id)")
-            except Exception:
-                logger.exception("Failed to create unique index on files(chat_id,message_id)")
+        col.create_index(
+            [("chat_id", 1), ("message_id", 1)],
+            unique=True,
+        )
 
-            # Text index on search_text for $text searches
-            try:
-                # If any text index already exists on this collection, skip
-                # creating a new one (MongoDB allows only a single text index
-                # per collection and attempting to create another will raise
-                # IndexOptionsConflict). Use list_indexes to detect existing
-                # text indexes.
-                existing_text_index = None
-                try:
-                    for idx in col.list_indexes():
-                        if idx is None:
-                            continue
-                        # presence of 'textIndexVersion' indicates a text index
-                        if "textIndexVersion" in idx:
-                            existing_text_index = idx
-                            break
-                except Exception:
-                    existing_text_index = None
+        col.create_index(
+            [("search_text", TEXT)],
+            name="search_text_text",
+        )
 
-                if existing_text_index:
-                    try:
-                        logger.info("Text index already present (name={}), skipping creation", existing_text_index.get("name"))
-                    except Exception:
-                        logger.info("Text index already present, skipping creation")
-                else:
-                    # No existing text index: create one on `search_text`.
-                    col.create_index([("search_text", TEXT)], background=True, name="search_text_text", weights={"search_text": 1})
-                    logger.info("Ensured text index on files(search_text)")
-            except Exception as exc:
-                # If an equivalent index exists with different options we may
-                # get an IndexOptionsConflict; log info and continue.
-                try:
-                    from pymongo.errors import OperationFailure
+        col.create_index("trigrams")
+        col.create_index("title_tokens")
 
-                    if isinstance(exc, OperationFailure) and getattr(exc, "code", None) == 85:
-                        logger.info("Text index creation skipped: equivalent index already exists")
-                    else:
-                        logger.exception("Failed to create text index on files(search_text): {}", exc)
-                except Exception:
-                    logger.exception("Failed to create text index on files(search_text): {}", exc)
+        idx_col = self.db.get_collection("index_state")
+        idx_col.create_index("chat_id", unique=True)
 
-            # Indexes to speed up trigram / token queries
-            try:
-                col.create_index("trigrams", background=True)
-            except Exception:
-                logger.exception("Failed to create index on files(trigrams)")
-            try:
-                col.create_index("title_tokens", background=True)
-            except Exception:
-                logger.exception("Failed to create index on files(title_tokens)")
-
-            # Ensure index_state has unique chat_id index
-            try:
-                idx_col = self.db.get_collection("index_state")
-                idx_col.create_index("chat_id", unique=True, background=True)
-            except Exception:
-                logger.exception("Failed to create index on index_state(chat_id)")
-
-        except Exception:
-            logger.exception("ensure_indexes: unexpected error")
+        logger.info("MongoDB indexes ensured")
 
     def get_last_indexed(self, chat_id: int) -> int:
-        """Return the last indexed message id for a chat (0 if none).
-
-        This is a synchronous helper used by backfill scripts and
-        backfill workers which call it without awaiting.
-        """
         try:
             self._ensure_connected()
         except Exception:
-            logger.exception("get_last_indexed: cannot connect to MongoDB")
+            logger.exception(
+                "get_last_indexed: cannot connect to MongoDB"
+            )
             return 0
 
         try:
-            doc = self.db.index_state.find_one({"chat_id": chat_id})
+            doc = self.db.index_state.find_one(
+                {"chat_id": chat_id}
+            )
+
             if not doc:
                 return 0
+
             last = doc.get("last_message_id")
+
             if last is None:
                 return 0
+
             try:
                 return int(last)
             except Exception:
                 return 0
+
         except Exception:
-            logger.exception("get_last_indexed: unexpected error")
+            logger.exception(
+                "get_last_indexed: unexpected error"
+            )
             return 0
