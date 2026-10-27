@@ -9,7 +9,7 @@ from pymongo.errors import OperationFailure
 import certifi
 import ssl
 from app.config.settings import settings
-from app.services import keep_warm
+from app.services import update_dedup
 from app.services.tokenizer import tokenize_query
 from app.services.relevance import (
     DEFAULT_MIN_TIER,
@@ -188,33 +188,6 @@ _STARTUP_TASKS: set = set()
 _STARTED_AT = time.time()
 
 
-# Who is hitting /health/live, split by source. A Free Render instance only
-# stays awake on inbound traffic, and whether a request this process makes to
-# its own public URL is counted has never been documented. These counters are
-# the evidence: an external pinger (the keepalive workflow, or any uptime
-# monitor) lands in `external`, the opt-in self-ping in `self`.
-_health_checks: dict = {
-    "self": 0,
-    "self_last_at": None,
-    "external": 0,
-    "external_last_at": None,
-    "external_last_user_agent": None,
-}
-
-
-def _record_health_check(request: Request) -> None:
-    """Count one /health/live hit, noting whether it came from this process."""
-    now = time.time()
-    ua = (request.headers.get("user-agent") or "")[:120]
-    if request.headers.get("x-keep-warm") == "1" or "keep-warm-internal" in ua:
-        _health_checks["self"] += 1
-        _health_checks["self_last_at"] = now
-    else:
-        _health_checks["external"] += 1
-        _health_checks["external_last_at"] = now
-        _health_checks["external_last_user_agent"] = ua or None
-
-
 @app.on_event("startup")
 async def startup():
     # Serve first. uvicorn answers no request until startup returns, and on a
@@ -223,10 +196,6 @@ async def startup():
     # boots). Waiting for Mongo, index creation and webhook registration here
     # adds 10-25s on top of that, which is what made Telegram record a failed
     # delivery and the bot look deaf after a spin-down.
-    # Opt-in: ping our own public URL so a Free instance never idles long
-    # enough to spin down (see app/services/keep_warm.py). Independent of
-    # Mongo, so it starts even while the backends are still connecting.
-    keep_warm.start()
     task = asyncio.create_task(_initialize_backends())
     _STARTUP_TASKS.add(task)
     task.add_done_callback(_STARTUP_TASKS.discard)
@@ -673,7 +642,6 @@ async def shutdown():
             mongo_client.close()
         except Exception:
             pass
-    keep_warm.stop()
     # stop background backfill task if running
     backfill_task = getattr(app.state, "backfill_task", None)
     if backfill_task:
@@ -843,11 +811,19 @@ async def telegram_webhook(token: str, update: dict):
     Telegram treats a slow answer as a failed delivery, and the POST that wakes
     a spun-down Free instance is the one with the least time to spare, so the
     work is scheduled here and the 200 goes out immediately.
+
+    Acknowledging fast is also what makes a duplicate possible: Telegram stops
+    waiting at ~60s, which a cold start can outlast, so it retries an update it
+    already delivered. The retry is dropped here rather than answered twice -
+    the 200 still goes out, so the retry loop ends.
     """
     creds = [c for c in settings.API_CREDENTIALS if c.get("bot_token") == token]
     if not creds:
         logger.warning("Received webhook for unknown token")
         return JSONResponse(status_code=404, content={"ok": False, "error": "unknown token"})
+    if not update_dedup.mark_seen(update.get("update_id")):
+        logger.info("Duplicate delivery of update {} dropped", update.get("update_id"))
+        return {"ok": True}
     task = asyncio.create_task(_dispatch_update(token, update))
     _INFLIGHT_UPDATES.add(task)
     return {"ok": True}
@@ -2797,13 +2773,12 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
 
 @app.get("/health/live")
 @app.get("/healthz")
-async def health_live(request: Request):
+async def health_live():
     """Liveness only: no MongoDB access, so Render's health check passes while
     the backends are still coming up instead of restart-looping a slow boot.
 
-    Also the endpoint an external keep-alive should hit: public, cheap, and it
-    never waits on Mongo."""
-    _record_health_check(request)
+    Deliberately the cheapest route in the app: it is the one Render probes, and
+    on a Free instance anything slower turns a cold start into a restart loop."""
     return {"ok": True, "db_ready": getattr(app.state, "db", None) is not None}
 
 
@@ -2863,10 +2838,10 @@ async def _telegram_webhook_info(token: str) -> dict:
 async def status(request: Request):
     """Answer "why is the bot deaf?" in one request.
 
-    Reports the DB flag, the webhook this process registered, the keep-warm
-    loop, and Telegram's own getWebhookInfo for every configured bot (pending
-    updates, max_connections, last delivery error). Disabled unless
-    STATUS_TOKEN is set, and it never returns a bot token.
+    Reports the DB flag, the webhook this process registered, the duplicate
+    suppression guard, and Telegram's own getWebhookInfo for every configured
+    bot (pending updates, max_connections, last delivery error). Disabled
+    unless STATUS_TOKEN is set, and it never returns a bot token.
     """
     expected = os.getenv("STATUS_TOKEN")
     if not expected:
@@ -2888,8 +2863,7 @@ async def status(request: Request):
         "ok": True,
         "uptime_seconds": round(time.time() - _STARTED_AT, 1),
         "db_ready": getattr(app.state, "db", None) is not None,
-        "keep_warm": keep_warm.snapshot(),
-        "health_checks": dict(_health_checks),
+        "update_dedup": update_dedup.snapshot(),
         "webhook_registration": getattr(app.state, "webhook_registration", None),
         "webhooks": webhooks,
     }
