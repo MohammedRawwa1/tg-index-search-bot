@@ -188,6 +188,33 @@ _STARTUP_TASKS: set = set()
 _STARTED_AT = time.time()
 
 
+# Who is hitting /health/live, split by source. A Free Render instance only
+# stays awake on inbound traffic, and whether a request this process makes to
+# its own public URL is counted has never been documented. These counters are
+# the evidence: an external pinger (the keepalive workflow, or any uptime
+# monitor) lands in `external`, the opt-in self-ping in `self`.
+_health_checks: dict = {
+    "self": 0,
+    "self_last_at": None,
+    "external": 0,
+    "external_last_at": None,
+    "external_last_user_agent": None,
+}
+
+
+def _record_health_check(request: Request) -> None:
+    """Count one /health/live hit, noting whether it came from this process."""
+    now = time.time()
+    ua = (request.headers.get("user-agent") or "")[:120]
+    if request.headers.get("x-keep-warm") == "1" or "keep-warm-internal" in ua:
+        _health_checks["self"] += 1
+        _health_checks["self_last_at"] = now
+    else:
+        _health_checks["external"] += 1
+        _health_checks["external_last_at"] = now
+        _health_checks["external_last_user_agent"] = ua or None
+
+
 @app.on_event("startup")
 async def startup():
     # Serve first. uvicorn answers no request until startup returns, and on a
@@ -2770,9 +2797,13 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
 
 @app.get("/health/live")
 @app.get("/healthz")
-async def health_live():
+async def health_live(request: Request):
     """Liveness only: no MongoDB access, so Render's health check passes while
-    the backends are still coming up instead of restart-looping a slow boot."""
+    the backends are still coming up instead of restart-looping a slow boot.
+
+    Also the endpoint an external keep-alive should hit: public, cheap, and it
+    never waits on Mongo."""
+    _record_health_check(request)
     return {"ok": True, "db_ready": getattr(app.state, "db", None) is not None}
 
 
@@ -2858,6 +2889,7 @@ async def status(request: Request):
         "uptime_seconds": round(time.time() - _STARTED_AT, 1),
         "db_ready": getattr(app.state, "db", None) is not None,
         "keep_warm": keep_warm.snapshot(),
+        "health_checks": dict(_health_checks),
         "webhook_registration": getattr(app.state, "webhook_registration", None),
         "webhooks": webhooks,
     }
