@@ -3,11 +3,13 @@ from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse, Str
 import json
 from fastapi.staticfiles import StaticFiles
 import os
+import time
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import OperationFailure
 import certifi
 import ssl
 from app.config.settings import settings
+from app.services import keep_warm
 from app.services.tokenizer import tokenize_query
 from app.services.relevance import (
     DEFAULT_MIN_TIER,
@@ -182,6 +184,9 @@ def _get_db():
 # collect them mid-flight.
 _STARTUP_TASKS: set = set()
 
+# Process start, so /status can report uptime.
+_STARTED_AT = time.time()
+
 
 @app.on_event("startup")
 async def startup():
@@ -191,6 +196,10 @@ async def startup():
     # boots). Waiting for Mongo, index creation and webhook registration here
     # adds 10-25s on top of that, which is what made Telegram record a failed
     # delivery and the bot look deaf after a spin-down.
+    # Opt-in: ping our own public URL so a Free instance never idles long
+    # enough to spin down (see app/services/keep_warm.py). Independent of
+    # Mongo, so it starts even while the backends are still connecting.
+    keep_warm.start()
     task = asyncio.create_task(_initialize_backends())
     _STARTUP_TASKS.add(task)
     task.add_done_callback(_STARTUP_TASKS.discard)
@@ -316,6 +325,7 @@ async def _initialize_backends():
     public_url = getattr(settings, "PUBLIC_URL", None)
     if not public_url:
         public_url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    registrations: list = []
     if public_url:
         for cred in (settings.API_CREDENTIALS or []):
             bot_token = cred.get("bot_token")
@@ -341,14 +351,24 @@ async def _initialize_backends():
                         data = resp.json()
                         if data.get("ok"):
                             logger.info("Webhook registered for bot: url={} description={}", webhook_url, data.get("description"))
+                            registrations.append({"bot": _redact_token(bot_token), "ok": True})
                         else:
                             logger.warning("Webhook registration returned error for bot: {}", data)
+                            registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": data.get("description") or "error"})
                     else:
                         logger.warning("Webhook registration HTTP {} for bot", resp.status_code)
+                        registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": f"http_{resp.status_code}"})
             except Exception:
                 logger.exception("Failed to register webhook for bot token ending with {}...", bot_token[-8:] if len(bot_token) > 8 else bot_token)
+                registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": "exception"})
+        host = urllib.parse.urlsplit(public_url).hostname
+        for entry in registrations:
+            entry["public_url_host"] = host
+            entry["at"] = time.time()
+        app.state.webhook_registration = registrations
     else:
         logger.warning("PUBLIC_URL not set — skipping auto webhook registration")
+        app.state.webhook_registration = [{"ok": False, "detail": "PUBLIC_URL not set"}]
 
     # Determine whether the API process should also run Telegram clients/backfill.
     run_bots = (os.getenv("RUN_BOT_IN_API", "false").lower() in ("1", "true", "yes"))
@@ -626,6 +646,7 @@ async def shutdown():
             mongo_client.close()
         except Exception:
             pass
+    keep_warm.stop()
     # stop background backfill task if running
     backfill_task = getattr(app.state, "backfill_task", None)
     if backfill_task:
@@ -2767,6 +2788,79 @@ async def health():
         return {"ok": True, "files": files}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+def _redact_token(token: str | None) -> str:
+    """Identify a bot without printing its token."""
+    if not token:
+        return "(none)"
+    return f"...{token[-6:]}" if len(token) > 6 else "..."
+
+
+def _redact_webhook_path(url: str) -> str:
+    """Keep the route shape, hide the token segment Telegram delivers to."""
+    segments = [s for s in urllib.parse.urlsplit(url or "").path.split("/") if s]
+    if not segments:
+        return "/"
+    return "/" + "/".join("***" if (":" in s or any(ch.isdigit() for ch in s)) else s for s in segments)
+
+
+async def _telegram_webhook_info(token: str) -> dict:
+    """Telegram's own view of the bot: where it delivers and what last failed."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"https://api.telegram.org/bot{token}/getWebhookInfo")
+        data = resp.json()
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    if not data.get("ok"):
+        return {"error": data.get("description") or f"http_{resp.status_code}"}
+    info = data.get("result") or {}
+    url = info.get("url") or ""
+    return {
+        "webhook_host": urllib.parse.urlsplit(url).hostname,
+        "webhook_path": _redact_webhook_path(url),
+        "pending_update_count": info.get("pending_update_count", 0),
+        "max_connections": info.get("max_connections"),
+        "last_error_message": info.get("last_error_message"),
+        "last_error_date": info.get("last_error_date"),
+        "ip_address": info.get("ip_address"),
+    }
+
+
+@app.get("/status")
+async def status(request: Request):
+    """Answer "why is the bot deaf?" in one request.
+
+    Reports the DB flag, the webhook this process registered, the keep-warm
+    loop, and Telegram's own getWebhookInfo for every configured bot (pending
+    updates, max_connections, last delivery error). Disabled unless
+    STATUS_TOKEN is set, and it never returns a bot token.
+    """
+    expected = os.getenv("STATUS_TOKEN")
+    if not expected:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "status disabled"})
+    provided = request.headers.get("X-STATUS-TOKEN") or request.query_params.get("token")
+    if provided != expected:
+        return JSONResponse(status_code=403, content={"ok": False, "error": "unauthorized"})
+
+    webhooks = []
+    for cred in (settings.API_CREDENTIALS or []):
+        bot_token = cred.get("bot_token")
+        if not bot_token:
+            continue
+        entry = {"bot": _redact_token(bot_token)}
+        entry.update(await _telegram_webhook_info(bot_token))
+        webhooks.append(entry)
+
+    return {
+        "ok": True,
+        "uptime_seconds": round(time.time() - _STARTED_AT, 1),
+        "db_ready": getattr(app.state, "db", None) is not None,
+        "keep_warm": keep_warm.snapshot(),
+        "webhook_registration": getattr(app.state, "webhook_registration", None),
+        "webhooks": webhooks,
+    }
 
 
 @app.get("/_diag/mongo_tls")

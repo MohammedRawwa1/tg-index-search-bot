@@ -1,50 +1,50 @@
 services:
   - type: "web"
-    name: "tg-file-index-web"
+    name: "tg-index-search-bot"
     env: "python"
     plan: "free"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "uvicorn app.api:app --host 0.0.0.0 --port $PORT"
-    # Health check for Render to consider the web service healthy
-    healthCheck:
-      path: "/health"
-      protocol: "http"
-      intervalSeconds: 10
-      timeoutSeconds: 5
-      unhealthyThreshold: 2
-      healthyThreshold: 1
-    # Environment variables (set values in Render dashboard; do NOT commit secrets)
+    # Liveness only. /health/live answers while Mongo and the webhook
+    # registration are still coming up; pointing this at /health makes the
+    # check fail during a slow boot and restart the container.
+    healthCheckPath: "/health/live"
     envVars:
+      # Secrets are placeholders (sync: false): set the values in the Render
+      # dashboard. A value committed here has to be rotated as soon as the
+      # repository leaks, and this repository's history already contains it.
       - key: "MONGO_URI"
-        value: ""
+        sync: false
+      - key: "BOT_TOKEN"
+        sync: false
+      - key: "API_ID"
+        sync: false
+      - key: "API_HASH"
+        sync: false
+      - key: "DIAG_SECRET"
+        sync: false
+      - key: "STATUS_TOKEN"
+        sync: false
+      - key: "TELEGRAPH_API_TOKEN"
+        sync: false
+      # PUBLIC_URL is left unset on purpose: the code falls back to
+      # RENDER_EXTERNAL_URL, which Render keeps in sync with the service. A
+      # manually pinned URL goes stale and makes the bot silently deaf.
       - key: "DB_NAME"
         value: "tg_index"
       - key: "LOG_LEVEL"
         value: "INFO"
       - key: "BACKFILL_AUTO"
         value: "false"
-  - type: "worker"
-    name: "tg-file-index-worker"
-    env: "python"
-    plan: "free"
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python -m app.main"
-    # Worker env placeholders (set real values in Render dashboard)
-    envVars:
-      - key: "MONGO_URI"
-        value: ""
-      - key: "DB_NAME"
-        value: "tg_index"
-      - key: "BOT_TOKEN"
-        value: ""
-      - key: "API_ID"
-        value: ""
-      - key: "API_HASH"
-        value: ""
-      - key: "BOT_OWNER"
-        value: ""
-      - key: "OWNER_ID"
-        value: ""
-      # Legacy: owner_id (lowercase) also supported as fallback
-      - key: "BACKFILL_AUTO"
-        value: "false"
+      # Telegram opens this many parallel deliveries to the webhook. A sleeping
+      # Free instance wakes on the first POST, so a large number turns a burst
+      # into connections the edge answers with 429.
+      - key: "WEBHOOK_MAX_CONNECTIONS"
+        value: "4"
+      # Opt-in self-ping that stops the service from reaching the 15-minute
+      # idle spin-down. One always-on Free service uses ~730 of the 750 monthly
+      # instance-hours, so keep it enabled on ONE service only.
+      - key: "KEEP_WARM"
+        value: "0"
+      - key: "KEEP_WARM_INTERVAL_SECONDS"
+        value: "600"
