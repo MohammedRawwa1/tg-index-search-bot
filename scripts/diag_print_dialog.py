@@ -5,6 +5,16 @@ if str(_ROOT) not in sys.path: sys.path.insert(0, str(_ROOT))
 from pyrogram import Client
 
 async def main():
+    # Target id and title come from the environment only (read-only); neither is
+    # stored in this repo. Read them before creating the client so a run with
+    # nothing configured never touches Telegram.
+    raw_target = os.getenv("DIAG_TARGET_CHAT_ID")
+    target = int(raw_target) if raw_target and raw_target.lstrip("-").isdigit() else raw_target
+    target_title = os.getenv("DIAG_TARGET_TITLE") or None
+    if target is None and not target_title:
+        print("Set DIAG_TARGET_CHAT_ID and/or DIAG_TARGET_TITLE; nothing to look for.")
+        return
+
     session_name = os.getenv("SESSION_NAME") or "user_session"
     # Accept TELETHON_SESSION as alias for SESSION_STRING
     session_string = os.getenv("SESSION_STRING") or os.getenv("TELETHON_SESSION")
@@ -34,11 +44,12 @@ async def main():
 
     await client.start()
     try:
-        target = -1002347599837
         found = False
         async for d in client.get_dialogs(limit=1000):
             chat = d.chat
-            if chat.id == target or getattr(chat, "title", None) == "VAULT of Success":
+            if (target is not None and chat.id == target) or (
+                target_title and getattr(chat, "title", None) == target_title
+            ):
                 print("FOUND", chat.id, getattr(chat,'title',None), getattr(chat,'username',None))
                 print("dir(chat):", [x for x in dir(chat) if not x.startswith('_')])
                 try:

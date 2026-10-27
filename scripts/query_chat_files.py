@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import certifi
 from pymongo import MongoClient
 import pathlib, sys
@@ -11,10 +12,15 @@ if str(_ROOT) not in sys.path:
 
 from app.config.settings import settings
 
-CHAT_ID = -1002347599837
+# Chat id is read from the environment only (read-only); no group id is stored
+# in this repo. Pass it as e.g. QUERY_CHAT_ID=-1001234567890.
+CHAT_ID = int(os.getenv("QUERY_CHAT_ID", "0") or 0)
 
 
 def main():
+    if not CHAT_ID:
+        print("QUERY_CHAT_ID is not set to a chat id (for example QUERY_CHAT_ID=-1001234567890); nothing to query.")
+        return
     uri = settings.MONGO_URI
     db_name = settings.DB_NAME
     try:

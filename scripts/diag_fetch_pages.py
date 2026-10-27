@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -43,8 +44,13 @@ queries = [
     ("seduction skills", {"$or":[ {"content": {"$regex": "seduction skills", "$options":"i"}}, {"page_header":{"$regex":"seduction skills","$options":"i"}}, {"query":{"$regex":"seduction skills","$options":"i"}} ]}),
     ("pdfcoffee", {"$or":[ {"content": {"$regex": "pdfcoffee", "$options":"i"}}, {"page_header":{"$regex":"pdfcoffee","$options":"i"}}, {"query":{"$regex":"pdfcoffee","$options":"i"}} ]}),
     ("algebra", {"$or":[ {"content": {"$regex": "algebra", "$options":"i"}}, {"page_header":{"$regex":"algebra","$options":"i"}}, {"query":{"$regex":"algebra","$options":"i"}} ]}),
-    ("chat_2347599837", {"$or":[ {"content": {"$regex": "2347599837", "$options":"i"}}, {"page_header":{"$regex":"2347599837","$options":"i"}}, {"query":{"$regex":"2347599837","$options":"i"}} ]}),
 ]
+
+# Optional extra search term, read from the environment only (read-only), so no
+# chat id or group name lives in this repo.
+_extra = os.getenv("DIAG_SEARCH_TEXT")
+if _extra:
+    queries.append((f"text_{_extra}", {"$or":[ {"content": {"$regex": _extra, "$options":"i"}}, {"page_header":{"$regex":_extra,"$options":"i"}}, {"query":{"$regex":_extra,"$options":"i"}} ]}))
 
 found_any = False
 

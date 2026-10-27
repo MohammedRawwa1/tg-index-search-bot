@@ -88,8 +88,20 @@ async def main():
         traceback.print_exc()
         return
     print("me:", await c.get_me())
-    # try variations
-    ids = ["-1002347599837", -1002347599837, 2347599837]
+    # Chat ids are read from the environment only - no group id is stored in
+    # this repo. Same "try variations" idea, for whatever ids you pass in.
+    raw_ids = [part.strip() for part in (os.getenv("CHECK_CHAT_IDS") or "").split(",") if part.strip()]
+    if not raw_ids:
+        print("CHECK_CHAT_IDS is not set (comma-separated chat ids); no id to probe.")
+    ids: list = []
+    for raw in raw_ids:
+        ids.append(raw)
+        try:
+            as_int = int(raw)
+        except ValueError:
+            continue
+        if as_int not in ids:
+            ids.append(as_int)
     for ident in ids:
         try:
             print("TRY", ident)
