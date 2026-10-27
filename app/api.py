@@ -178,8 +178,27 @@ def _get_db():
     return db
 
 
+# Background tasks spawned by startup; kept referenced so asyncio cannot
+# collect them mid-flight.
+_STARTUP_TASKS: set = set()
+
+
 @app.on_event("startup")
 async def startup():
+    # Serve first. uvicorn answers no request until startup returns, and on a
+    # Free instance this process is woken by the very request it has to answer
+    # (Render holds the connection for up to ~1 minute while the container
+    # boots). Waiting for Mongo, index creation and webhook registration here
+    # adds 10-25s on top of that, which is what made Telegram record a failed
+    # delivery and the bot look deaf after a spin-down.
+    task = asyncio.create_task(_initialize_backends())
+    _STARTUP_TASKS.add(task)
+    task.add_done_callback(_STARTUP_TASKS.discard)
+
+
+async def _initialize_backends():
+    # Everything startup used to do before serving: Mongo, indexes, cache and
+    # the webhook registration.
     # Try to establish a working MongoDB connection during startup.
     uri = settings.MONGO_URI
     if not uri:
@@ -307,7 +326,15 @@ async def startup():
                 async with httpx.AsyncClient() as client:
                     resp = await client.get(
                         f"https://api.telegram.org/bot{bot_token}/setWebhook",
-                        params={"url": webhook_url},
+                        params={
+                            "url": webhook_url,
+                            # Telegram opens up to this many parallel deliveries to
+                            # the webhook. A sleeping service wakes on the first
+                            # POST and holds it while the container boots, so the
+                            # default of 40 turns a burst into connections the
+                            # edge answers with 429.
+                            "max_connections": int(os.getenv("WEBHOOK_MAX_CONNECTIONS", "4")),
+                        },
                         timeout=10,
                     )
                     if resp.status_code == 200:
@@ -728,7 +755,57 @@ async def telegram_webhook_fallback(full_path: str, request: Request):
             return await telegram_webhook(seg_dec, body)
 
     return JSONResponse(status_code=404, content={"ok": False, "error": "unknown token"})
+# Updates whose HTTP response was already sent. asyncio keeps only a weak
+# reference to a bare task, so an update collected mid-flight would be dropped
+# even though Telegram already considers it delivered.
+_INFLIGHT_UPDATES: set = set()
+
+
+async def _wait_for_db_ready(timeout: float | None = None) -> bool:
+    """Wait (bounded) for the background startup to connect MongoDB."""
+    if timeout is None:
+        timeout = float(os.getenv("DB_READY_WAIT_SECONDS", "20") or 20)
+    deadline = asyncio.get_running_loop().time() + max(0.0, timeout)
+    while True:
+        if getattr(app.state, "db", None) is not None:
+            return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(0.25)
+
+
+async def _dispatch_update(token: str, update: dict) -> None:
+    """Run the real handler once the backends are up (or the wait expires)."""
+    try:
+        if not await _wait_for_db_ready():
+            logger.warning(
+                "MongoDB still not ready; handling update %s anyway",
+                update.get("update_id"),
+            )
+        await _telegram_webhook_inner(token, update)
+    except Exception:
+        logger.exception("Failed to handle Telegram update %s", update.get("update_id"))
+    finally:
+        _INFLIGHT_UPDATES.discard(asyncio.current_task())
+
+
 async def telegram_webhook(token: str, update: dict):
+    """Acknowledge first, then process in the background.
+
+    Telegram treats a slow answer as a failed delivery, and the POST that wakes
+    a spun-down Free instance is the one with the least time to spare, so the
+    work is scheduled here and the 200 goes out immediately.
+    """
+    creds = [c for c in settings.API_CREDENTIALS if c.get("bot_token") == token]
+    if not creds:
+        logger.warning("Received webhook for unknown token")
+        return JSONResponse(status_code=404, content={"ok": False, "error": "unknown token"})
+    task = asyncio.create_task(_dispatch_update(token, update))
+    _INFLIGHT_UPDATES.add(task)
+    return {"ok": True}
+
+
+async def _telegram_webhook_inner(token: str, update: dict):
     """Process Telegram Bot API webhook updates for configured bot tokens.
 
     Supports a minimal subset: responds to `/search <query>` by running the
@@ -2668,6 +2745,14 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
             logger.exception("_send_markdown_full: failed to send chunk {}/{}", idx + 1, len(chunks))
             # continue to next chunk
     return
+
+
+@app.get("/health/live")
+@app.get("/healthz")
+async def health_live():
+    """Liveness only: no MongoDB access, so Render's health check passes while
+    the backends are still coming up instead of restart-looping a slow boot."""
+    return {"ok": True, "db_ready": getattr(app.state, "db", None) is not None}
 
 
 @app.get("/health")
