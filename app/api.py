@@ -318,9 +318,24 @@ async def _initialize_backends():
     # For each configured bot token, register the webhook URL with Telegram
     # so updates are delivered to this service. This prevents issues where
     # a bot's webhook was previously set to a different URL.
-    public_url = getattr(settings, "PUBLIC_URL", None)
-    if not public_url:
-        public_url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    # Render sets RENDER_EXTERNAL_URL to this service's own hostname and keeps it
+    # in sync. PUBLIC_URL is whatever someone typed once, and a pinned value goes
+    # stale when the service is renamed or recreated - which registers the webhook
+    # to a host that no longer exists and leaves the bot permanently deaf. So
+    # Render's value wins, and a disagreement is reported loudly.
+    render_url = (os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+    pinned_url = (os.getenv("PUBLIC_URL") or "").strip()
+    public_url = render_url or pinned_url or getattr(settings, "PUBLIC_URL", None)
+    if render_url and pinned_url:
+        render_host = urllib.parse.urlsplit(render_url).hostname
+        pinned_host = urllib.parse.urlsplit(pinned_url).hostname
+        if render_host != pinned_host:
+            logger.error(
+                "PUBLIC_URL points at {} but this service is {}; registering with the latter. Remove the "
+                "stale PUBLIC_URL from the dashboard: a pinned URL goes stale and makes the bot deaf.",
+                pinned_host,
+                render_host,
+            )
     registrations: list = []
     if public_url:
         for cred in (settings.API_CREDENTIALS or []):
@@ -335,11 +350,11 @@ async def _initialize_backends():
                         params={
                             "url": webhook_url,
                             # Telegram opens up to this many parallel deliveries to
-                            # the webhook. A sleeping service wakes on the first
-                            # POST and holds it while the container boots, so the
-                            # default of 40 turns a burst into connections the
-                            # edge answers with 429.
-                            "max_connections": int(os.getenv("WEBHOOK_MAX_CONNECTIONS", "4")),
+                            # the webhook. A cold starting Free instance answers
+                            # extra parallel connections with 429, which Telegram
+                            # records as a failed delivery, so keep it at one: the
+                            # handler acks in milliseconds.
+                            "max_connections": int(os.getenv("WEBHOOK_MAX_CONNECTIONS", "1")),
                         },
                         timeout=10,
                     )
@@ -349,11 +364,27 @@ async def _initialize_backends():
                             logger.info("Webhook registered for bot: url={} description={}", webhook_url, data.get("description"))
                             registrations.append({"bot": _redact_token(bot_token), "ok": True})
                         else:
-                            logger.warning("Webhook registration returned error for bot: {}", data)
-                            registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": data.get("description") or "error"})
+                            detail = data.get("description") or "error"
+                            if resp.status_code == 401:
+                                detail += (
+                                    " (Telegram rejected the token itself: if the bot was deleted or the token"
+                                    " revoked, set BOT_TOKEN to the current token from BotFather - until then no"
+                                    " update can be delivered and nothing can wake this service)"
+                                )
+                            logger.error("Webhook registration rejected for bot: {} ({})", detail, resp.status_code)
+                            registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": detail})
                     else:
-                        logger.warning("Webhook registration HTTP {} for bot", resp.status_code)
-                        registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": f"http_{resp.status_code}"})
+                        detail = f"http_{resp.status_code}"
+                        if resp.status_code == 401:
+                            detail += (
+                                " (Telegram rejected the token itself: if the bot was deleted or the token"
+                                " revoked, set BOT_TOKEN to the current token from BotFather - until then no"
+                                " update can be delivered and nothing can wake this service)"
+                            )
+                            logger.error("Webhook registration rejected for bot: {}", detail)
+                        else:
+                            logger.warning("Webhook registration HTTP {} for bot", resp.status_code)
+                        registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": detail})
             except Exception:
                 logger.exception("Failed to register webhook for bot token ending with {}...", bot_token[-8:] if len(bot_token) > 8 else bot_token)
                 registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": "exception"})
