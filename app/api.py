@@ -350,11 +350,14 @@ async def _initialize_backends():
                         params={
                             "url": webhook_url,
                             # Telegram opens up to this many parallel deliveries to
-                            # the webhook. A cold starting Free instance answers
-                            # extra parallel connections with 429, which Telegram
-                            # records as a failed delivery, so keep it at one: the
-                            # handler acks in milliseconds.
-                            "max_connections": int(os.getenv("WEBHOOK_MAX_CONNECTIONS", "1")),
+                            # the webhook. This handler only validates and schedules
+                            # the update, then answers - it never waits for the
+                            # search - so a lane is occupied for milliseconds and
+                            # parallel lanes are free. One lane made a backlog of
+                            # updates queued while the instance slept drain
+                            # strictly one round trip at a time, which is what made
+                            # the first search after a wake crawl.
+                            "max_connections": int(os.getenv("WEBHOOK_MAX_CONNECTIONS", "10")),
                         },
                         timeout=10,
                     )
@@ -362,6 +365,9 @@ async def _initialize_backends():
                         data = resp.json()
                         if data.get("ok"):
                             logger.info("Webhook registered for bot: url={} description={}", webhook_url, data.get("description"))
+                            _log_webhook_delivery_state(
+                                await _telegram_webhook_info(bot_token), bot_token
+                            )
                             registrations.append({"bot": _redact_token(bot_token), "ok": True})
                         else:
                             detail = data.get("description") or "error"
@@ -2863,6 +2869,34 @@ async def _telegram_webhook_info(token: str) -> dict:
         "last_error_date": info.get("last_error_date"),
         "ip_address": info.get("ip_address"),
     }
+
+
+def _log_webhook_delivery_state(info: dict, bot_token: str) -> None:
+    """Record Telegram's view of this webhook right after registering it.
+
+    A cold instance wakes to whatever piled up while it was asleep. Those updates
+    are delivered before anything new, so the first search after a wake can sit
+    behind the backlog - which looks exactly like "Telegram stopped delivering".
+    Logging the queue size and lane width makes the real cause visible in the boot
+    log instead of leaving it to guesswork.
+    """
+    pending = info.get("pending_update_count")
+    logger.info(
+        "Webhook delivery state | bot={} | pending={} | max_connections={} | last_error={} | last_error_at={}",
+        _redact_token(bot_token),
+        pending,
+        info.get("max_connections"),
+        info.get("last_error_message"),
+        info.get("last_error_date"),
+    )
+    if isinstance(pending, int) and pending > 20:
+        logger.warning(
+            "{} updates were queued while this instance was asleep; they are handled "
+            "before new ones, so the first search after a wake will feel slow until "
+            "the backlog drains (WEBHOOK_MAX_CONNECTIONS={})",
+            pending,
+            os.getenv("WEBHOOK_MAX_CONNECTIONS", "default"),
+        )
 
 
 @app.get("/status")
