@@ -10,7 +10,9 @@ import certifi
 import ssl
 from app.config.settings import settings
 from app.services import update_dedup
+from app.i18n import bilingual, resolve_lang, t
 from app.services.tokenizer import tokenize_query
+from app.services.textnorm import normalize_text
 from app.services.relevance import (
     DEFAULT_MIN_TIER,
     NONE_TIER,
@@ -929,7 +931,11 @@ async def _telegram_webhook_inner(token: str, update: dict):
                         try:
                             page_query = page.get("query") or ""
                             content_md = md_to_markdown(page.get("content") or "")
-                            header = f"*Search:* {_escape_markdown(page_query)} — {page.get('total_results') or 0} results\n\n" if page_query else ""
+                            header = (
+                                "*" + t("results_header", query=_escape_markdown(page_query), total=page.get('total_results') or 0, text=page_query) + "*\n\n"
+                                if page_query
+                                else ""
+                            )
                             text_to_send = header + (content_md or "")
                             # minimal keyboard: show parts if available
                             gp = page.get("group_pages") or []
@@ -971,7 +977,7 @@ async def _telegram_webhook_inner(token: str, update: dict):
                                 total_parts_gp = len(gp)
                                 for pi, part in enumerate(gp, start=1):
                                     part_lines = (part.get("content") or "").splitlines()
-                                    part_header = f"{header} — part {pi}/{total_parts_gp}"
+                                    part_header = f"{header} — " + t("part_suffix", part=pi, parts=total_parts_gp)
                                     rm = reply_markup if pi == 1 else None
                                     await _send_markdown_full(token, chat_id_target, part_header, part_lines, reply_markup=rm)
                                 return
@@ -1183,13 +1189,12 @@ async def _telegram_webhook_inner(token: str, update: dict):
     # normalize command without botname suffix
     cmd = text.split(maxsplit=1)[0].split("@", 1)[0]
     if cmd == "/start":
-        welcome = "Hi — I can search indexed files. Use /search <query> to search."
-        await _send_tg(token, chat_id, welcome)
+        # Bilingual: a mixed audience reads the same screen.
+        await _send_tg(token, chat_id, bilingual("start"))
         return {"ok": True}
 
     if cmd == "/help":
-        help_text = "Commands:\n/search <query> — Search files\n/stats — Indexed file counts (owner only)\n/reindex <chat_id> — Backfill chat history (owner only)\n/health — DB health (owner only)\n/clear_all — Clear all indexed files (owner only)"
-        await _send_tg(token, chat_id, help_text)
+        await _send_tg(token, chat_id, bilingual("help"))
         return {"ok": True}
 
     if cmd == "/stats":
@@ -1389,7 +1394,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         results = res.get("results", [])
         total = res.get("total", 0)
         if not results:
-            reply_text = f"*No results* for {_escape_markdown(query)}"
+            reply_text = t("results_none_for", query=_escape_markdown(query), text=query)
             # Short-circuit: send a simple 'no results' reply immediately
             try:
                 await _send_tg(token, chat_id, reply_text, parse_mode="Markdown")
@@ -1401,7 +1406,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 logger.exception("_process_search_and_send: failed to send no-results message")
             return
         else:
-            lines = [f"*Search:* {_escape_markdown(query)} — {total} results"]
+            lines = ["*" + t("results_header", query=_escape_markdown(query), total=total, text=query) + "*"]
             from app.utils.helpers import sanitize_filename_for_display
             for i, r in enumerate(results, start=1):
                 raw_fname = r.get("filename") or "-"
@@ -1418,9 +1423,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
     # Prepare a default header early so later branches can reference it
     # without causing UnboundLocalError (some paths assign `header` later).
     try:
-        header = f"*Search:* {_escape_markdown(query)} — {total} results"
+        header = "*" + t("results_header", query=_escape_markdown(query), total=total, text=query) + "*"
     except Exception:
-        header = f"*Search:* {query} — {total} results"
+        header = "*" + t("results_header", query=query, total=total, text=query) + "*"
 
     MAX_MSG = 3000
     TELEGRAPH_THRESHOLD = 8000
@@ -1440,7 +1445,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 # Markdown link [Title](URL). We keep the header as a bold
                 # Markdown token and convert the result list via
                 # `md_to_markdown` so links and labels are escaped properly.
-                header = f"*Search:* {_escape_markdown(query)} — {total} results"
+                header = "*" + t("results_header", query=_escape_markdown(query), total=total, text=query) + "*"
                 md_lines = []
                 for i, r in enumerate(results, start=1):
                     raw_fname = (r.get("filename") or "-").replace("\n", " ")
@@ -1525,9 +1530,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                     ref["match_score"] = None
                                 # heuristic match type: prefer filename-based detection using normalized keys
                                 try:
-                                    qnorm = re.sub(r"[^a-z0-9\s]", " ", (query or "").lower()).strip()
+                                    qnorm = normalize_text(query)
                                     fname_norm = ref.get("filename_norm") or ""
-                                    fname = (ref.get("filename") or "").lower()
+                                    fname = normalize_text(ref.get("filename"))
                                     if qnorm and fname_norm and qnorm == fname_norm:
                                         ref["match_type"] = "filename_exact"
                                     elif qnorm and fname and qnorm in fname:
@@ -1550,9 +1555,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                         total_results = len(md_lines)
                         # Bind a clean header string to the saved page parts
                         try:
-                            page_header = f"Search: {query} — {total_results} results"
+                            page_header = t("results_header", query=query, total=total_results, text=query)
                         except Exception:
-                            page_header = f"Search: {query}"
+                            page_header = t("results_header_plain", query=query, text=query)
                         pages = []
                         for part_index, (chunk, chunk_refs) in enumerate(chunks_with_refs):
                             try:
@@ -1655,7 +1660,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                             total_parts_gp = len(gp)
                                             for pi, part in enumerate(gp, start=1):
                                                 part_lines = (part.get("content") or "").splitlines()
-                                                part_header = f"{header} — part {pi}/{total_parts_gp}"
+                                                part_header = f"{header} — " + t("part_suffix", part=pi, parts=total_parts_gp)
                                                 # attach reply markup only to the first part
                                                 rm = reply_markup if pi == 1 else None
                                                 await _send_markdown_full(token, chat_id, part_header, part_lines, reply_markup=rm)
@@ -1802,9 +1807,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                 except Exception:
                                     ref["match_score"] = None
                                 try:
-                                    qnorm = re.sub(r"[^a-z0-9\s]", " ", (query or "").lower()).strip()
+                                    qnorm = normalize_text(query)
                                     fname_norm = ref.get("filename_norm") or ""
-                                    fname = (ref.get("filename") or "").lower()
+                                    fname = normalize_text(ref.get("filename"))
                                     if qnorm and fname_norm and qnorm == fname_norm:
                                         ref["match_type"] = "filename_exact"
                                     elif qnorm and fname and qnorm in fname:
@@ -1827,9 +1832,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                         total_parts = len(chunks_with_refs)
                         total_results = len(md_lines)
                         try:
-                            page_header = f"Search: {query} — {total_results} results"
+                            page_header = t("results_header", query=query, total=total_results, text=query)
                         except Exception:
-                            page_header = f"Search: {query}"
+                            page_header = t("results_header_plain", query=query, text=query)
                         for part_index, (chunk, chunk_refs) in enumerate(chunks_with_refs):
                             try:
                                 try:
@@ -2052,7 +2057,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                 total_parts_gp = len(gp)
                                 for pi, part in enumerate(gp, start=1):
                                     part_lines = (part.get("content") or "").splitlines()
-                                    part_header = f"{header} — part {pi}/{total_parts_gp}"
+                                    part_header = f"{header} — " + t("part_suffix", part=pi, parts=total_parts_gp)
                                     rm = reply_markup if pi == 1 else None
                                     try:
                                         logger.debug("saved-page send pi={} of {} reply_markup_present={} reply_markup_preview={}", pi, total_parts_gp, bool(rm), json.dumps(rm)[:400] if rm else None)
@@ -2090,7 +2095,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         total_parts = len(parts)
         # Send each part with a small header containing metadata
         for idx, part in enumerate(parts, start=1):
-            header = f"*Search:* {_escape_markdown(query)} — part {idx}/{total_parts}"
+            header = "*" + t("results_part", query=_escape_markdown(query), part=idx, parts=total_parts, text=query) + "*"
             meta_txt = f"results:{total} query_len:{len(query)} ts:{datetime.utcnow().isoformat()}Z"
             meta = f"\n_{_escape_markdown(meta_txt)}_\n\n"
             text_to_send = header + meta + part
@@ -2575,11 +2580,11 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                         # callback button that opens the internal page.
                         try:
                             if str(public_url).lower().startswith("https://"):
-                                btn = {"text": "Open formatted results", "url": public_url}
+                                btn = {"text": t("open_results"), "url": public_url}
                             else:
-                                btn = {"text": "Open formatted results", "callback_data": f"IP|{pid}"}
+                                btn = {"text": t("open_results"), "callback_data": f"IP|{pid}"}
                         except Exception:
-                            btn = {"text": "Open formatted results", "callback_data": f"IP|{pid}"}
+                            btn = {"text": t("open_results"), "callback_data": f"IP|{pid}"}
 
                         try:
                             orig_rm = reply_markup
@@ -3286,7 +3291,7 @@ async def public_page(request: Request, page_id: str):
 
                             # 4) fuzzy token-ordered match
                             try:
-                                norm = re.sub(r'[^a-z0-9]+', ' ', filename.lower()).strip()
+                                norm = normalize_text(filename)
                                 tokens_norm = [t for t in norm.split() if t]
                                 if tokens_norm:
                                     tokens_use = tokens_norm[:6]
@@ -3305,7 +3310,7 @@ async def public_page(request: Request, page_id: str):
 
                             # 5) try by longer token fragments
                             try:
-                                long_tokens = [t for t in (re.split(r'[^a-z0-9]+', filename.lower()) or []) if len(t) >= 4]
+                                long_tokens = [t for t in normalize_text(filename).split() if len(t) >= 4]
                                 for tok in long_tokens[:3]:
                                     try:
                                         q = {"filename": {"$regex": re.escape(tok), "$options": "i"}}
@@ -3455,8 +3460,14 @@ async def public_page(request: Request, page_id: str):
     except Exception:
         pass
 
-    page_query = html.escape(page.get("query") or "")
-    title = f"Search: {page_query} — {page.get('total_results') or 0} results" if page_query else "Search results"
+    raw_query = page.get("query") or ""
+    page_query = html.escape(raw_query)
+    page_lang = resolve_lang(text=raw_query)
+    title = (
+        t("results_header", query=page_query, total=page.get("total_results") or 0, lang=page_lang)
+        if page_query
+        else t("results_title", page_lang)
+    )
 
     # Render top links if present
     tlinks = page.get("top_links") or []
@@ -3473,20 +3484,21 @@ async def public_page(request: Request, page_id: str):
         if parts:
             top_html = "<div class=\"top-links\">" + " | ".join(parts) + "</div><hr/>"
 
+    page_dir = "rtl" if page_lang == "ar" else "ltr"
     html_page = f"""<!doctype html>
-<html>
+<html lang="{page_lang}" dir="{page_dir}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{html.escape(title)}</title>
-  <style>body{{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:16px}}a{{color:#1a73e8}}</style>
+  <style>body{{font-family:system-ui,Segoe UI,Roboto,'Noto Naskh Arabic',Tahoma,Arial,sans-serif;padding:16px;line-height:1.6}}.content{{unicode-bidi:plaintext}}a{{color:#1a73e8}}</style>
 </head>
 <body>
   <h1>{html.escape(title)}</h1>
   {top_html}
   <div class="content">{html_body}</div>
   <hr/>
-  <small>Page id: {html.escape(page_id)}</small>
+  <small>{html.escape(t("page_id", page_lang, page_id=page_id))}</small>
 </body>
 </html>"""
 
@@ -4020,7 +4032,7 @@ async def api_search(
                     total_parts = len(chunks)
                     total_results = len(lines)
                     try:
-                        page_header = f"Export: {q} — {total_results} results"
+                        page_header = t("export_header", query=q, total=total_results, text=q)
                     except Exception:
                         page_header = f"Export: {q}"
                     for part_index, (chunk, chunk_refs) in enumerate(chunks):

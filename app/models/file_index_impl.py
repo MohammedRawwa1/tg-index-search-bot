@@ -4,6 +4,7 @@ import re
 import os
 import asyncio
 from app.services.search_utils import make_trigrams, TRIGRAM_MAX
+from app.services.textnorm import normalize_text
 from app.services.relevance import (
     DEFAULT_MIN_TIER,
     MIN_RESULTS,
@@ -66,19 +67,15 @@ class FileIndex:
         if not filename:
             return ""
         try:
-            s = str(filename).lower()
+            s = str(filename)
         except Exception:
             s = filename or ""
         # remove trailing extension
         if "." in s:
             s = s.rsplit(".", 1)[0]
-        # replace underscores/dashes/dots with spaces
-        s = re.sub(r"[_\-.–—]", " ", s)
-        # remove any remaining non-alnum characters to spaces
-        s = re.sub(r"[^a-z0-9]+", " ", s)
-        s = s.strip()
-        s = re.sub(r"\s+", " ", s)
-        return s
+        # case-fold, fold Arabic variants, keep words of every script and
+        # collapse separators to single spaces
+        return normalize_text(s)
 
     async def upsert_file(
         self,

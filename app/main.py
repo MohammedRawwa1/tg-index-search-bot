@@ -59,6 +59,21 @@ async def _start() -> None:
         logger.warning("No API credentials found — bot will run without clients.")
     await bot_mgr.start_all()
 
+    # Publish the command menu (never registered before, so Telegram showed an
+    # empty list). Bot clients accept it; userbot clients raise and are skipped.
+    try:
+        from pyrogram.types import BotCommand
+        from app.i18n import command_menu
+
+        commands = [BotCommand(cmd, desc) for cmd, desc in command_menu()]
+        for client in bot_mgr.clients:
+            try:
+                await client.set_bot_commands(commands)
+            except Exception:
+                logger.debug("set_bot_commands skipped for %s", getattr(client, "name", "client"))
+    except Exception:
+        logger.exception("could not publish the command menu")
+
     # run forever
     await asyncio.Event().wait()
 

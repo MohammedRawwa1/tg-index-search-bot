@@ -1,12 +1,15 @@
 import re
 from typing import List, Dict, Any, Optional
 
+from app.services.textnorm import clean_text, normalize_text
+
 # improved normalization/tokenization rules
-# token patterns: prefer explicit quality/year tokens and alnum sequences
+# token patterns: any Unicode letter/digit run, so Arabic, Persian, Cyrillic,
+# Greek, Hebrew and CJK names index instead of collapsing to zero tokens.
 _sep_re = re.compile(r'[\.\-_\[\]\(\)]+')
 _space_re = re.compile(r"\s+")
 _camel_re = re.compile(r'(?<!^)(?=[A-Z])')
-_token_re = re.compile(r'\d{3,4}p|\d{4}|[a-z0-9]+', re.IGNORECASE)
+_token_re = re.compile(r'[^\W_]+', re.UNICODE)
 
 # common release/junk tokens to strip (keeps numeric tokens like 1080p)
 # NOTE: media/document file extensions are included so they never pollute
@@ -109,7 +112,8 @@ def normalize_and_classify(filename: str) -> Dict[str, Any]:
     s = base.replace("\n", " ")
     s = _sep_re.sub(" ", s)
     s = " ".join(_split_camel(s))
-    s = s.lower()
+    # casefold + Arabic variant folding (diacritics, alef/yaa/taa forms)
+    s = clean_text(s)
     s = _space_re.sub(" ", s).strip()
 
     # extract candidate tokens with the token regex
@@ -140,8 +144,8 @@ def normalize_and_classify(filename: str) -> Dict[str, Any]:
         # known release/junk tokens: skip
         if pl in _release_junk:
             continue
-        # simple alnum tokens are good title tokens
-        if re.match(r"^[a-z0-9]+$", pl):
+        # any letter/digit token (all scripts) is a good title token
+        if _token_re.fullmatch(pl):
             title_tokens.append(pl)
             continue
         other.append(pl)
@@ -173,6 +177,5 @@ def tokenize_query(query: str) -> List[str]:
     q = query.replace("\n", " ")
     q = _sep_re.sub(" ", q)
     q = " ".join(_split_camel(q))
-    q = q.lower().strip()
-    tokens = [t.lower() for t in _token_re.findall(q) if t]
+    tokens = [t for t in normalize_text(q).split() if t]
     return tokens

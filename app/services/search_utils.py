@@ -1,19 +1,15 @@
-import re
 from functools import lru_cache
 from typing import List, Set, Iterable
+
+from app.services.textnorm import normalize_text as _textnorm_normalize
 
 # Maximum trigrams to keep per document/query to limit index size and work
 TRIGRAM_MAX = 300
 
 
 def _normalize_text(s: str) -> str:
-    if not s:
-        return ""
-    s = s.lower()
-    # keep alnum and spaces
-    s = re.sub(r"[^a-z0-9\s]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+    """Unicode-aware normalization (any script, case-folded, Arabic folded)."""
+    return _textnorm_normalize(s)
 
 
 @lru_cache(maxsize=2048)

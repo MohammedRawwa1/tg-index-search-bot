@@ -4,7 +4,9 @@ import asyncio
 import time
 import uuid
 
+from app.i18n import resolve_lang, t
 from app.services.tokenizer import tokenize_query
+from app.services.textnorm import normalize_text
 from app.models.file_index_impl import FileIndex
 from app.utils.helpers import (
     escape_markdown,
@@ -264,9 +266,9 @@ def build_line_ref(r, query: str) -> dict:
         ref["match_score"] = None
     # Heuristic match_type
     try:
-        qnorm = re.sub(r"[^a-z0-9\s]", " ", (query or "").lower()).strip()
+        qnorm = normalize_text(query)
         fname = (r.get("filename") or "").lower()
-        fname_norm = re.sub(r"[^a-z0-9\s]", " ", fname).strip()
+        fname_norm = normalize_text(fname)
         if qnorm and fname_norm and qnorm == fname_norm:
             ref["match_type"] = "filename_exact"
         elif qnorm and fname and qnorm in fname:
@@ -345,9 +347,9 @@ async def save_pages(store, query, tokens, chunk_iter, user_id):
     # Prepare a stored page header to bind to saved parts so renderers
     # can use a consistent header instead of attaching it separately.
     try:
-        page_header = f"Search: {query} — {total_results} results"
+        page_header = t("results_header", query=query, total=total_results, text=query)
     except Exception:
-        page_header = f"Search: {query}"
+        page_header = t("results_header_plain", query=query, text=query)
 
     for part, chunk in enumerate(chunks):
         try:
@@ -387,25 +389,26 @@ def register_search_handlers(client: Client, mongo):
     async def search_handler(client: Client, message: Message):
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.reply_text("Usage: /search <query>")
+            await message.reply_text(t("usage_search"))
             return
 
         query = args[1].strip()
         uid = message.from_user.id if message.from_user else None
+        lang = resolve_lang(text=query)
 
         # cooldown
         now = time.time()
         if uid and uid in _LAST_SEARCH and now - _LAST_SEARCH[uid] < _COOLDOWN:
-            await message.reply_text("Slow down...")
+            await message.reply_text(t("slow_down", lang))
             return
         _LAST_SEARCH[uid] = now
 
         tokens = tokenize_query(query)
         if not tokens:
-            await message.reply_text("Invalid query")
+            await message.reply_text(t("invalid_query", lang))
             return
 
-        searching = await message.reply_text("🔍 Searching...")
+        searching = await message.reply_text(t("searching", lang))
 
         # -------------------------------
         # STREAM RESULTS → build lines + per-line refs
@@ -437,7 +440,7 @@ def register_search_handlers(client: Client, mongo):
         store = getattr(client, "_internal_page_store", None)
 
         if not store:
-            await safe_edit_or_send(client, searching, message, "No page store available")
+            await safe_edit_or_send(client, searching, message, t("no_page_store", lang))
             return
 
         pages = await save_pages(
@@ -449,7 +452,7 @@ def register_search_handlers(client: Client, mongo):
         )
 
         if not pages:
-            await safe_edit_or_send(client, searching, message, "No results")
+            await safe_edit_or_send(client, searching, message, t("no_results", lang))
             return
 
         # -------------------------------
@@ -473,7 +476,11 @@ def register_search_handlers(client: Client, mongo):
                         combined_parts.append("")
 
                 combined_md = "\n".join([c for c in combined_parts if c])
-                header = f"*Search:* {query} — {int(first.get('total_results', 0))} results\n\n" if query else ""
+                header = (
+                    "*" + t("results_header", query=query, total=int(first.get('total_results', 0)), lang=lang) + "*\n\n"
+                    if query
+                    else ""
+                )
                 try:
                     chat_id_target = message.chat.id if message and message.chat else None
                     reply_markup_obj = InlineKeyboardMarkup(kb) if kb else None
@@ -521,18 +528,19 @@ def register_search_handlers(client: Client, mongo):
         """
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            await message.reply_text("Usage: /export <query>")
+            await message.reply_text(t("usage_export"))
             return
 
         query = args[1].strip()
         uid = message.from_user.id if message.from_user else None
+        lang = resolve_lang(text=query)
 
         tokens = tokenize_query(query)
         if not tokens:
-            await message.reply_text("Invalid query")
+            await message.reply_text(t("invalid_query", lang))
             return
 
-        notice = await message.reply_text("📤 Exporting full results... this may take a while")
+        notice = await message.reply_text(t("export_start", lang))
 
         try:
             lines = []
@@ -563,11 +571,15 @@ def register_search_handlers(client: Client, mongo):
             except Exception:
                 md_safe = content
 
-            header = f"*Search:* {query} — {count} results\n\n" if query else ""
+            header = (
+                "*" + t("results_header", query=query, total=count, lang=lang) + "*\n\n"
+                if query
+                else ""
+            )
             await send_markdown_chunks(client, message.chat.id, header, md_safe, reply_markup_obj=None, edit_msg=notice)
         except Exception as exc:
             logger.exception("export failed: {}", exc)
-            await message.reply_text("Export failed.")
+            await message.reply_text(t("export_failed", lang))
         finally:
             try:
                 await notice.delete()

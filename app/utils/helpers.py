@@ -6,9 +6,14 @@ import html
 import os
 import urllib.parse
 
+from app.i18n import resolve_lang, t
+from app.services.textnorm import normalize_text
+
 
 # Patterns to redact
-_email_re = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+# ``\w`` is Unicode-aware, so a non-Latin address (e.g. مستخدم@موقع.com) is
+# redacted too instead of slipping through the Latin-only form.
+_email_re = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", re.UNICODE)
 _phone_re = re.compile(r"\+?\d[\d\- ]{6,}\d")
 _long_num_re = re.compile(r"\d{7,}")
 
@@ -264,21 +269,26 @@ def build_pagination_keyboard(query: str, page: int, per_page: int, total: int) 
         # fallback: encode using base64 of query
         return encode_search_callback(q, p, per)
 
+    lang = resolve_lang(text=query)
     buttons = []
     # Prev
     if page > 1:
-        buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=_make_cb(query, page - 1, per_page)))
+        buttons.append(InlineKeyboardButton(t("prev", lang), callback_data=_make_cb(query, page - 1, per_page)))
     # Home (go to first page)
     if page > 1:
-        buttons.append(InlineKeyboardButton("🏠 Home", callback_data=_make_cb(query, 1, per_page)))
+        buttons.append(InlineKeyboardButton(t("home", lang), callback_data=_make_cb(query, 1, per_page)))
     # Page indicator
-    buttons.append(InlineKeyboardButton(f"Page {page}/{max(1, pages)}", callback_data="noop"))
+    buttons.append(
+        InlineKeyboardButton(
+            t("page_indicator", lang, page=page, pages=max(1, pages)), callback_data="noop"
+        )
+    )
     # End (go to last page)
     if page < pages:
-        buttons.append(InlineKeyboardButton("End ⏭", callback_data=_make_cb(query, pages, per_page)))
+        buttons.append(InlineKeyboardButton(t("end", lang), callback_data=_make_cb(query, pages, per_page)))
     # Next
     if page < pages:
-        buttons.append(InlineKeyboardButton("Next ➡️", callback_data=_make_cb(query, page + 1, per_page)))
+        buttons.append(InlineKeyboardButton(t("next", lang), callback_data=_make_cb(query, page + 1, per_page)))
 
     return InlineKeyboardMarkup([buttons])
 
@@ -537,8 +547,7 @@ def normalize_filename_key(s: str) -> str:
             t = urllib.parse.unquote(t)
         except Exception:
             pass
-        t = re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
-        return t
+        return normalize_text(t)
     except Exception:
         return ""
 
@@ -765,22 +774,28 @@ def render_paginated_page(page: dict, query_override: str | None = None, max_msg
 
     # navigation row
     gp_ids = [p.get("page_id") if isinstance(p, dict) else p for p in (gp or [])]
+    lang = resolve_lang(text=page_query)
     nav = []
     if cur_idx > 0:
         prev_id = gp_ids[cur_idx - 1] if cur_idx - 1 < len(gp_ids) else None
         home_id = gp_ids[0] if gp_ids else None
         if prev_id:
-            nav.append({"text": "⬅️ Prev", "callback_data": f"IP|{prev_id}"})
+            nav.append({"text": t("prev", lang), "callback_data": f"IP|{prev_id}"})
         if home_id:
-            nav.append({"text": "🏠 Home", "callback_data": f"IP|{home_id}"})
-    nav.append({"text": f"Part {cur_idx+1}/{max(1,total)}", "callback_data": "noop"})
+            nav.append({"text": t("home", lang), "callback_data": f"IP|{home_id}"})
+    nav.append(
+        {
+            "text": t("part_indicator", lang, part=cur_idx + 1, total=max(1, total)),
+            "callback_data": "noop",
+        }
+    )
     if total > 0 and cur_idx < total - 1:
         next_id = gp_ids[cur_idx + 1] if cur_idx + 1 < len(gp_ids) else None
         end_id = gp_ids[-1] if gp_ids else None
         if next_id:
-            nav.append({"text": "Next ➡️", "callback_data": f"IP|{next_id}"})
+            nav.append({"text": t("next", lang), "callback_data": f"IP|{next_id}"})
         if end_id:
-            nav.append({"text": "End ⏭", "callback_data": f"IP|{end_id}"})
+            nav.append({"text": t("end", lang), "callback_data": f"IP|{end_id}"})
     if nav:
         kb_rows.append(nav)
 
@@ -795,10 +810,14 @@ def render_paginated_page(page: dict, query_override: str | None = None, max_msg
     # Header (plain text)
     max_links = max_links_per_page if max_links_per_page is not None else (getattr(settings, "MAX_LINKS_PER_PAGE", 100) if settings is not None else 100)
     page_total = page.get("total_results") if page.get("total_results") is not None else (len(gp) * max_links)
-    header = f"Search: {page_query} — {page_total} results\n\n" if page_query else ""
+    header = t("results_header", query=page_query, total=page_total, lang=lang) + "\n\n" if page_query else ""
 
     # Build full Markdown body (do not truncate here; callers decide how to split)
-    md_header = f"*Search:* {page_query} — {page_total} results\n\n" if page_query else ""
+    md_header = (
+        "*" + t("results_header", query=page_query, total=page_total, lang=lang) + "*\n\n"
+        if page_query
+        else ""
+    )
     # Prefer Markdown-safe content when available
     md_body = content_md_safe or content_plain or ""
     md_text_to_send = md_header + md_body

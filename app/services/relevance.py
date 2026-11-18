@@ -33,6 +33,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from app.services.search_utils import make_trigrams, trigram_similarity, TRIGRAM_MAX
+from app.services.textnorm import normalize_text as _normalize_text
 from app.utils.logger import logger
 
 # ---------------------------------------------------------------------------
@@ -98,14 +99,14 @@ QUALITY_LOGGING = os.getenv("SEARCH_QUALITY_LOG", "true").strip().lower() in ("1
 # Normalization helpers
 # ---------------------------------------------------------------------------
 
-_ALNUM_RE = re.compile(r"[^a-z0-9]+")
-
-
 def normalize_text(text: Optional[str]) -> str:
-    """Lowercase alnum-only normalized form (single spaces)."""
-    if not text:
-        return ""
-    return _ALNUM_RE.sub(" ", str(text).lower()).strip()
+    """Case-folded, word-only normalized form (single spaces).
+
+    Delegates to :mod:`app.services.textnorm` so words in any script (Arabic,
+    Persian, Cyrillic, CJK, ...) survive instead of being deleted by a
+    Latin-only pattern. Re-exported here for existing callers.
+    """
+    return _normalize_text(text)
 
 
 def tokenize_norm(text: Optional[str]) -> List[str]:
@@ -326,8 +327,8 @@ def compute_search_score(
 
     # filename contains the full query (substring)
     try:
-        q_lower = (query or "").lower().strip()
-        fname = str(doc.get("filename") or "").lower()
+        q_lower = normalize_text(query)
+        fname = normalize_text(doc.get("filename"))
         if q_lower and q_lower in fname:
             fine += float(w.get("filename", 1.0))
     except Exception:
