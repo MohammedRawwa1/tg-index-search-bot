@@ -6,7 +6,7 @@ try:
     from app.api import md_to_markdown, _escape_markdown
     from app.config.settings import settings
 except Exception as e:
-    print('Import failed:', e)
+    print("Import failed:", e)
     raise
 
 filenames = [
@@ -75,7 +75,7 @@ filenames = [
 
 lines = []
 for i, name in enumerate(filenames, start=1):
-    safe = name.replace('\n', ' ')
+    safe = name.replace("\n", " ")
     url = f"https://t.me/c/12345/{1000 + i}"
     lines.append(f"{i}) [{safe}]({url})")
 
@@ -83,9 +83,10 @@ content = "\n".join(lines)
 content_md = md_to_markdown(content)
 query = "tom torero"
 from app.api import _escape_markdown as escape
+
 header = f"*Search:* {escape(query)} — {len(filenames)} results\n\n"
 
-MAX_MSG = getattr(settings, 'MAX_MSG', 4000)
+MAX_MSG = getattr(settings, "MAX_MSG", 4000)
 TELEGRAM_LIMIT = min(int(MAX_MSG), 4096)
 note = "\n\n_Showing truncated results due to size limits._"
 
@@ -110,12 +111,12 @@ else:
 
 text_to_send = header + body
 
-print('TELEGRAM_LIMIT=', TELEGRAM_LIMIT)
-print('header_len=', len(header))
-print('content_md_len=', len(content_md))
-print('text_to_send_len=', len(text_to_send))
-print('lines_body_total=', len(lines_body))
-print('kept_lines_count=', len(kept_lines))
-print('last kept lines:')
+print("TELEGRAM_LIMIT=", TELEGRAM_LIMIT)
+print("header_len=", len(header))
+print("content_md_len=", len(content_md))
+print("text_to_send_len=", len(text_to_send))
+print("lines_body_total=", len(lines_body))
+print("kept_lines_count=", len(kept_lines))
+print("last kept lines:")
 for ln in kept_lines[-10:]:
     print(ln)

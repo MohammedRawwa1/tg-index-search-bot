@@ -43,7 +43,13 @@ def build_sample_lines(count: int, base_chat: str = "12345"):
     return lines
 
 
-async def try_send(token: str, chat_id: int, text: str, reply_markup: object | None = None, parse_modes=None):
+async def try_send(
+    token: str,
+    chat_id: int,
+    text: str,
+    reply_markup: object | None = None,
+    parse_modes=None,
+):
     if parse_modes is None:
         parse_modes = ["MarkdownV2", "Markdown", None]
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -69,7 +75,11 @@ async def try_send(token: str, chat_id: int, text: str, reply_markup: object | N
                     print(resp.text[:400])
                 return True, resp
             # Detect Telegram parse errors and continue to fallback
-            if resp.status_code == 400 and ("can't parse entities" in body.lower() or "parse entities" in body.lower() or "can't parse" in body.lower()):
+            if resp.status_code == 400 and (
+                "can't parse entities" in body.lower()
+                or "parse entities" in body.lower()
+                or "can't parse" in body.lower()
+            ):
                 print("Parse error reported by Telegram for mode=", mode)
                 continue
             # For other non-200 responses try next mode
@@ -78,13 +88,29 @@ async def try_send(token: str, chat_id: int, text: str, reply_markup: object | N
 
 
 async def main():
-    p = argparse.ArgumentParser(description="Test GUI: create internal page and optionally send GUI message")
+    p = argparse.ArgumentParser(
+        description="Test GUI: create internal page and optionally send GUI message"
+    )
     p.add_argument("--query", required=True)
-    p.add_argument("--count", type=int, default=6, help="Number of sample links to create")
-    p.add_argument("--live", action="store_true", help="Actually POST to Telegram API (requires --token and --chat)")
+    p.add_argument(
+        "--count", type=int, default=6, help="Number of sample links to create"
+    )
+    p.add_argument(
+        "--live",
+        action="store_true",
+        help="Actually POST to Telegram API (requires --token and --chat)",
+    )
     p.add_argument("--token", help="Bot token (alternatively set BOT_TOKEN env var)")
-    p.add_argument("--chat", type=int, help="Target chat id (alternatively set TEST_CHAT_ID env var)")
-    p.add_argument("--base-chat", default="12345", help="Numeric base used inside sample t.me links (for dry-run visualization)")
+    p.add_argument(
+        "--chat",
+        type=int,
+        help="Target chat id (alternatively set TEST_CHAT_ID env var)",
+    )
+    p.add_argument(
+        "--base-chat",
+        default="12345",
+        help="Numeric base used inside sample t.me links (for dry-run visualization)",
+    )
 
     args = p.parse_args()
 
@@ -101,7 +127,16 @@ async def main():
 
     # Save a single-part raw page
     try:
-        saved = await store.save_raw_page(args.query, raw_md, tokens=[], created_by=None, group=None, part_index=0, total_parts=1, total_results=args.count)
+        saved = await store.save_raw_page(
+            args.query,
+            raw_md,
+            tokens=[],
+            created_by=None,
+            group=None,
+            part_index=0,
+            total_parts=1,
+            total_results=args.count,
+        )
     except Exception as exc:
         print("Failed to save page:", exc)
         raise
@@ -112,7 +147,12 @@ async def main():
     # Build top_links and persist
     top_links = []
     for i in range(1, min(9, args.count) + 1):
-        top_links.append({"text": f"{i}) Sample video {i}", "url": f"https://t.me/c/{args.base_chat}/{1000 + i}"})
+        top_links.append(
+            {
+                "text": f"{i}) Sample video {i}",
+                "url": f"https://t.me/c/{args.base_chat}/{1000 + i}",
+            }
+        )
 
     try:
         await store.set_top_links(page_id, top_links)
@@ -162,7 +202,9 @@ async def main():
             nav.append({"text": "⬅️ Prev", "callback_data": f"IP|{prev_id}"})
         if home_id:
             nav.append({"text": "🏠 Home", "callback_data": f"IP|{home_id}"})
-    nav.append({"text": f"Part {cur_idx+1}/{max(1,total_pg)}", "callback_data": "noop"})
+    nav.append(
+        {"text": f"Part {cur_idx + 1}/{max(1, total_pg)}", "callback_data": "noop"}
+    )
     if total_pg > 0 and cur_idx < total_pg - 1:
         next_id = gp_ids[cur_idx + 1] if cur_idx + 1 < len(gp_ids) else None
         end_id = gp_ids[-1] if gp_ids else None
@@ -190,7 +232,9 @@ async def main():
 
     if args.live:
         if not token or not chat_id:
-            print("Missing BOT token or chat id for live send. Provide --token and --chat or set BOT_TOKEN/TEST_CHAT_ID env vars.")
+            print(
+                "Missing BOT token or chat id for live send. Provide --token and --chat or set BOT_TOKEN/TEST_CHAT_ID env vars."
+            )
             sys.exit(4)
         # Ensure the message fits Telegram limits before attempting to send.
         TELEGRAM_LIMIT = 4096
@@ -212,10 +256,14 @@ async def main():
             if kept:
                 body_part = "\n".join(kept) + note
             else:
-                body_part = "_Results too large to display. Use navigation to view parts._"
+                body_part = (
+                    "_Results too large to display. Use navigation to view parts._"
+                )
             full_text = header + body_part
 
-        ok, resp = await try_send(token, chat_id, full_text, reply_markup, parse_modes=["Markdown", None])
+        ok, resp = await try_send(
+            token, chat_id, full_text, reply_markup, parse_modes=["Markdown", None]
+        )
         if not ok:
             print("All send attempts failed. See logs above.")
             sys.exit(5)

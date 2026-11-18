@@ -4,7 +4,12 @@ import asyncio
 from typing import Optional
 
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import (
+    Message,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery,
+)
 
 from app.config.settings import settings
 from app.handlers.indexer import backfill_history
@@ -85,7 +90,9 @@ def register_admin_handlers(client: Client, mongo):
 
         args = message.text.split(maxsplit=1)
         if len(args) == 1:
-            await message.reply_text("Usage: /reindex <chat_id>\nExample: /reindex -1001234567890")
+            await message.reply_text(
+                "Usage: /reindex <chat_id>\nExample: /reindex -1001234567890"
+            )
             return
 
         try:
@@ -186,7 +193,10 @@ async def handle_admin_callback(client: Client, cq: CallbackQuery):
     # the owner how to confirm, so an accidental tap never wipes the index.
     if data.startswith("C|"):
         try:
-            await cq.answer("Type /clear_all confirm delete (or confirm drop) to proceed", show_alert=True)
+            await cq.answer(
+                "Type /clear_all confirm delete (or confirm drop) to proceed",
+                show_alert=True,
+            )
         except Exception:
             pass
         return
@@ -239,7 +249,9 @@ async def handle_admin_callback(client: Client, cq: CallbackQuery):
             files_col = mongo.db.get_collection("files")
             total_files = files_col.count_documents({})
             duplicates = files_col.count_documents({"is_duplicate": True})
-            await cq.message.reply_text(f"Total files: {total_files}\nDuplicates: {duplicates}")
+            await cq.message.reply_text(
+                f"Total files: {total_files}\nDuplicates: {duplicates}"
+            )
             await cq.answer()
         except Exception:
             await cq.answer("Failed to fetch stats", show_alert=True)

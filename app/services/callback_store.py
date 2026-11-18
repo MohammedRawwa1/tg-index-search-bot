@@ -21,7 +21,12 @@ class CallbackStore:
     def store_query(self, query: str, ttl_seconds: int = 86400) -> str:
         token = self._make_token()
         now = datetime.utcnow()
-        doc = {"token": token, "query": query, "created_at": now, "expires_at": now + timedelta(seconds=ttl_seconds)}
+        doc = {
+            "token": token,
+            "query": query,
+            "created_at": now,
+            "expires_at": now + timedelta(seconds=ttl_seconds),
+        }
         # upsert in case of collision (unlikely)
         self._col.insert_one(doc)
         return token

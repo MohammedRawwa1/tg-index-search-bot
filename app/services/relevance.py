@@ -92,12 +92,17 @@ TRIGRAM_MIN_SIM = _env_float("TRIGRAM_MIN_SIM", 0.22)
 # (the smallest tier gap is 10 between "phrase" and "all").
 FINE_SCORE_CAP = 9.0
 
-QUALITY_LOGGING = os.getenv("SEARCH_QUALITY_LOG", "true").strip().lower() in ("1", "true", "yes")
+QUALITY_LOGGING = os.getenv("SEARCH_QUALITY_LOG", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 
 # ---------------------------------------------------------------------------
 # Normalization helpers
 # ---------------------------------------------------------------------------
+
 
 def normalize_text(text: Optional[str]) -> str:
     """Case-folded, word-only normalized form (single spaces).
@@ -135,7 +140,13 @@ def is_contiguous_phrase(q_tokens: Sequence[str], doc_tokens: Sequence[str]) -> 
 class MatchInfo:
     __slots__ = ("tier", "priority", "coverage", "matched", "flags")
 
-    def __init__(self, tier: str, coverage: float = 0.0, matched: int = 0, flags: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        tier: str,
+        coverage: float = 0.0,
+        matched: int = 0,
+        flags: Optional[Dict[str, Any]] = None,
+    ):
         self.tier = tier
         self.priority = TIER_PRIORITY.get(tier, 0.0)
         self.coverage = float(coverage)
@@ -216,7 +227,11 @@ def classify_match(
     except Exception:
         doc_norm = title_str
     if q_norm:
-        if q_norm == fname_norm or q_norm == doc_norm or (title_str and q_norm == title_str):
+        if (
+            q_norm == fname_norm
+            or q_norm == doc_norm
+            or (title_str and q_norm == title_str)
+        ):
             return MatchInfo("exact", 1.0, matched, {"filename": fname_norm == q_norm})
         # full-title prefix: the normalized name starts with the full query and
         # only a short run of release-junk tokens follows (e.g. "...mkv").
@@ -224,9 +239,11 @@ def classify_match(
         if len(q_tokens) >= 2:
             for cand in (doc_norm, fname_norm):
                 if cand.startswith(q_norm + " "):
-                    remainder = cand[len(q_norm):].strip().split()
+                    remainder = cand[len(q_norm) :].strip().split()
                     if 0 < len(remainder) <= 2:
-                        return MatchInfo("exact", 1.0, matched, {"filename_prefix": True})
+                        return MatchInfo(
+                            "exact", 1.0, matched, {"filename_prefix": True}
+                        )
 
     # --- phrase: all tokens as a contiguous sequence in the title ---
     if len(q_tokens) >= 2 and is_contiguous_phrase(q_tokens, doc_titles):
@@ -307,7 +324,9 @@ def compute_search_score(
 
     # quality / codec matches
     try:
-        q_quality = q_set & set(str(t).lower() for t in (doc.get("quality_tokens") or []))
+        q_quality = q_set & set(
+            str(t).lower() for t in (doc.get("quality_tokens") or [])
+        )
         fine += len(q_quality) * float(w.get("quality", 1.0))
     except Exception:
         pass
@@ -379,7 +398,9 @@ def accepts_tier(tier: str, min_tier: str) -> bool:
         return False
 
 
-def resolve_min_tier(classified: Sequence[Dict[str, Any]], start_tier: Optional[str] = None) -> str:
+def resolve_min_tier(
+    classified: Sequence[Dict[str, Any]], start_tier: Optional[str] = None
+) -> str:
     """Walk the tier ladder from `start_tier` toward lower precision.
 
     Starting at `start_tier` (default SEARCH_MIN_TIER), accept the most
@@ -471,7 +492,9 @@ def filter_by_tier(
     classified = []
     for doc in docs or []:
         try:
-            match = classify_match(q_text, q_tokens, doc, q_tris, allow_broad=allow_broad)
+            match = classify_match(
+                q_text, q_tokens, doc, q_tris, allow_broad=allow_broad
+            )
             if match.tier == NONE_TIER:
                 continue
             doc["_tier"] = match.tier
@@ -481,5 +504,7 @@ def filter_by_tier(
             continue
 
     min_tier = resolve_min_tier(classified, start_tier=start_tier)
-    accepted = [d for d in classified if accepts_tier(d.get("_tier", NONE_TIER), min_tier)]
+    accepted = [
+        d for d in classified if accepts_tier(d.get("_tier", NONE_TIER), min_tier)
+    ]
     return accepted, min_tier

@@ -11,7 +11,9 @@ class BotManager:
     session_key (optional) which references an encrypted session stored via SessionStore.
     """
 
-    def __init__(self, api_credentials: List[Dict], session_store: Optional[object] = None):
+    def __init__(
+        self, api_credentials: List[Dict], session_store: Optional[object] = None
+    ):
         self.api_credentials = api_credentials or []
         self.session_store = session_store
         self.clients: List[Client] = []
@@ -36,7 +38,9 @@ class BotManager:
             session_string = None
             if cred.get("session_key") and self.session_store:
                 try:
-                    session_string = self.session_store.get_session_string(cred.get("session_key"))
+                    session_string = self.session_store.get_session_string(
+                        cred.get("session_key")
+                    )
                 except Exception:
                     session_string = None
             # Fallback to inline session_string if provided directly in credentials

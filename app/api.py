@@ -1,5 +1,12 @@
 from fastapi import FastAPI, Query, HTTPException, Request
-from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse, StreamingResponse, HTMLResponse, Response
+from fastapi.responses import (
+    JSONResponse,
+    FileResponse,
+    PlainTextResponse,
+    StreamingResponse,
+    HTMLResponse,
+    Response,
+)
 import json
 from fastapi.staticfiles import StaticFiles
 import os
@@ -28,7 +35,13 @@ import httpx
 import html
 import re
 from app.utils.logger import logger
-from app.utils.helpers import unescape_for_plain_text, render_paginated_page, md_to_plain_text, _MD_LINK_RE, normalize_bracket_links
+from app.utils.helpers import (
+    unescape_for_plain_text,
+    render_paginated_page,
+    md_to_plain_text,
+    _MD_LINK_RE,
+    normalize_bracket_links,
+)
 import asyncio
 from asyncio.subprocess import PIPE
 import pathlib
@@ -71,7 +84,9 @@ async def _reject_callback_if_not_owner(token: str, cq: dict) -> bool:
         owner = settings.BOT_OWNER or settings.OWNER_ID
         if owner and int(from_id) != int(owner):
             try:
-                await _answer_callback(token, cq.get("id"), text="Unauthorized", show_alert=True)
+                await _answer_callback(
+                    token, cq.get("id"), text="Unauthorized", show_alert=True
+                )
             except Exception:
                 pass
             return True
@@ -84,7 +99,8 @@ def _escape_markdown(text: str) -> str:
     """Escape Telegram Markdown v1 safely."""
     if not text:
         return ""
-    return re.sub(r'([*_`\[\]])', r"\\\1", str(text))
+    return re.sub(r"([*_`\[\]])", r"\\\1", str(text))
+
 
 def _escape_url(url: str) -> str:
     """Escape parentheses and spaces in URLs to avoid breaking Markdown links."""
@@ -120,6 +136,7 @@ def md_to_markdown(raw_text: str) -> str:
     out.append(_escape_markdown(raw_text[last:]))
 
     return "".join(out)
+
 
 from pyrogram import Client as TGClient
 from app.services.mongo import MongoService
@@ -231,9 +248,17 @@ async def _initialize_backends():
         # ssl.SSLContext directly because some pymongo versions raise
         # "Unknown option ssl_context" when it's provided.
         ca = certifi.where()
-        client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=ms, connectTimeoutMS=ms, tls=True, tlsCAFile=ca)
+        client = AsyncIOMotorClient(
+            uri,
+            serverSelectionTimeoutMS=ms,
+            connectTimeoutMS=ms,
+            tls=True,
+            tlsCAFile=ca,
+        )
     else:
-        client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=ms, connectTimeoutMS=ms)
+        client = AsyncIOMotorClient(
+            uri, serverSelectionTimeoutMS=ms, connectTimeoutMS=ms
+        )
     try:
         # attempt a lightweight ping to verify connectivity
         await client.admin.command("ping")
@@ -250,7 +275,9 @@ async def _initialize_backends():
                 [("chat_id", 1), ("message_thread_id", 1), ("timestamp", 1)],
                 background=True,
             )
-            logger.info("Ensured compound index files(chat_id,message_thread_id,timestamp)")
+            logger.info(
+                "Ensured compound index files(chat_id,message_thread_id,timestamp)"
+            )
         except Exception:
             logger.exception("Failed to create compound index on files collection")
             # best-effort: do not fail startup if index creation fails
@@ -258,25 +285,38 @@ async def _initialize_backends():
         # Ensure indexes that speed up eager/normalized lookups
         try:
             try:
-                await app.state.db.get_collection("files").create_index([("norm_filename", 1)], background=True)
+                await app.state.db.get_collection("files").create_index(
+                    [("norm_filename", 1)], background=True
+                )
                 logger.info("Ensured index files(norm_filename)")
             except Exception:
                 logger.exception("Failed to create index files(norm_filename)")
             try:
                 # multikey index on trigrams array to accelerate trigram candidate queries
-                await app.state.db.get_collection("files").create_index([("trigrams", 1)], background=True)
+                await app.state.db.get_collection("files").create_index(
+                    [("trigrams", 1)], background=True
+                )
                 logger.info("Ensured index files(trigrams)")
             except Exception:
                 logger.exception("Failed to create index files(trigrams)")
             try:
                 # text index on search_text used by $text queries
-                await app.state.db.get_collection("files").create_index([("search_text", "text")], background=True)
+                await app.state.db.get_collection("files").create_index(
+                    [("search_text", "text")], background=True
+                )
                 logger.info("Ensured text index files(search_text)")
             except OperationFailure as of:
                 if of.code == 85:
-                    logger.warning("Text index already exists (code 85): {} — using existing index", of)
+                    logger.warning(
+                        "Text index already exists (code 85): {} — using existing index",
+                        of,
+                    )
                 else:
-                    logger.warning("Failed to create text index files(search_text): code={} {}", of.code, of)
+                    logger.warning(
+                        "Failed to create text index files(search_text): code={} {}",
+                        of.code,
+                        of,
+                    )
             except Exception:
                 logger.exception("Failed to create text index files(search_text)")
         except Exception:
@@ -286,8 +326,15 @@ async def _initialize_backends():
         try:
             from app.services.cache import AsyncSearchCache
 
-            cache_db = getattr(settings, "TELEGRAPH_DB", None) or getattr(settings, "DB_NAME", None)
-            app.state.search_cache = AsyncSearchCache(app.state.mongo_client, db_name=cache_db, max_entries=getattr(settings, "SEARCH_CACHE_MAX_ENTRIES", 1024), default_ttl=getattr(settings, "SEARCH_CACHE_TTL", 3600))
+            cache_db = getattr(settings, "TELEGRAPH_DB", None) or getattr(
+                settings, "DB_NAME", None
+            )
+            app.state.search_cache = AsyncSearchCache(
+                app.state.mongo_client,
+                db_name=cache_db,
+                max_entries=getattr(settings, "SEARCH_CACHE_MAX_ENTRIES", 1024),
+                default_ttl=getattr(settings, "SEARCH_CACHE_TTL", 3600),
+            )
             try:
                 # ensure Mongo TTL/indexes (best-effort)
                 await app.state.search_cache.ensure_indexes()
@@ -297,11 +344,16 @@ async def _initialize_backends():
             app.state.search_cache = None
         # Initialize internal page store: prefer Mongo-backed store, fall back to in-memory
         try:
-            from app.services.internal_pages import InternalPageStore, InMemoryInternalPageStore
+            from app.services.internal_pages import (
+                InternalPageStore,
+                InMemoryInternalPageStore,
+            )
 
             if getattr(app.state, "mongo_client", None):
                 try:
-                    app.state.internal_page_store = InternalPageStore(app.state.mongo_client)
+                    app.state.internal_page_store = InternalPageStore(
+                        app.state.mongo_client
+                    )
                 except Exception:
                     app.state.internal_page_store = InMemoryInternalPageStore()
             else:
@@ -309,7 +361,9 @@ async def _initialize_backends():
         except Exception:
             app.state.internal_page_store = None
     except Exception as exc:
-        logger.warning("MongoDB not reachable at startup, continuing without DB: {}", exc)
+        logger.warning(
+            "MongoDB not reachable at startup, continuing without DB: {}", exc
+        )
         try:
             client.close()
         except Exception:
@@ -340,7 +394,7 @@ async def _initialize_backends():
             )
     registrations: list = []
     if public_url:
-        for cred in (settings.API_CREDENTIALS or []):
+        for cred in settings.API_CREDENTIALS or []:
             bot_token = cred.get("bot_token")
             if not bot_token:
                 continue
@@ -359,18 +413,26 @@ async def _initialize_backends():
                             # updates queued while the instance slept drain
                             # strictly one round trip at a time, which is what made
                             # the first search after a wake crawl.
-                            "max_connections": int(os.getenv("WEBHOOK_MAX_CONNECTIONS", "10")),
+                            "max_connections": int(
+                                os.getenv("WEBHOOK_MAX_CONNECTIONS", "10")
+                            ),
                         },
                         timeout=10,
                     )
                     if resp.status_code == 200:
                         data = resp.json()
                         if data.get("ok"):
-                            logger.info("Webhook registered for bot: url={} description={}", webhook_url, data.get("description"))
+                            logger.info(
+                                "Webhook registered for bot: url={} description={}",
+                                webhook_url,
+                                data.get("description"),
+                            )
                             _log_webhook_delivery_state(
                                 await _telegram_webhook_info(bot_token), bot_token
                             )
-                            registrations.append({"bot": _redact_token(bot_token), "ok": True})
+                            registrations.append(
+                                {"bot": _redact_token(bot_token), "ok": True}
+                            )
                         else:
                             detail = data.get("description") or "error"
                             if resp.status_code == 401:
@@ -379,8 +441,18 @@ async def _initialize_backends():
                                     " revoked, set BOT_TOKEN to the current token from BotFather - until then no"
                                     " update can be delivered and nothing can wake this service)"
                                 )
-                            logger.error("Webhook registration rejected for bot: {} ({})", detail, resp.status_code)
-                            registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": detail})
+                            logger.error(
+                                "Webhook registration rejected for bot: {} ({})",
+                                detail,
+                                resp.status_code,
+                            )
+                            registrations.append(
+                                {
+                                    "bot": _redact_token(bot_token),
+                                    "ok": False,
+                                    "detail": detail,
+                                }
+                            )
                     else:
                         detail = f"http_{resp.status_code}"
                         if resp.status_code == 401:
@@ -389,13 +461,32 @@ async def _initialize_backends():
                                 " revoked, set BOT_TOKEN to the current token from BotFather - until then no"
                                 " update can be delivered and nothing can wake this service)"
                             )
-                            logger.error("Webhook registration rejected for bot: {}", detail)
+                            logger.error(
+                                "Webhook registration rejected for bot: {}", detail
+                            )
                         else:
-                            logger.warning("Webhook registration HTTP {} for bot", resp.status_code)
-                        registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": detail})
+                            logger.warning(
+                                "Webhook registration HTTP {} for bot", resp.status_code
+                            )
+                        registrations.append(
+                            {
+                                "bot": _redact_token(bot_token),
+                                "ok": False,
+                                "detail": detail,
+                            }
+                        )
             except Exception:
-                logger.exception("Failed to register webhook for bot token ending with {}...", bot_token[-8:] if len(bot_token) > 8 else bot_token)
-                registrations.append({"bot": _redact_token(bot_token), "ok": False, "detail": "exception"})
+                logger.exception(
+                    "Failed to register webhook for bot token ending with {}...",
+                    bot_token[-8:] if len(bot_token) > 8 else bot_token,
+                )
+                registrations.append(
+                    {
+                        "bot": _redact_token(bot_token),
+                        "ok": False,
+                        "detail": "exception",
+                    }
+                )
         host = urllib.parse.urlsplit(public_url).hostname
         for entry in registrations:
             entry["public_url_host"] = host
@@ -406,11 +497,13 @@ async def _initialize_backends():
         app.state.webhook_registration = [{"ok": False, "detail": "PUBLIC_URL not set"}]
 
     # Determine whether the API process should also run Telegram clients/backfill.
-    run_bots = (os.getenv("RUN_BOT_IN_API", "false").lower() in ("1", "true", "yes"))
+    run_bots = os.getenv("RUN_BOT_IN_API", "false").lower() in ("1", "true", "yes")
 
     # --- Start Pyrogram BotManager so the API process can also run Telegram clients ---
     if not run_bots:
-        logger.info("RUN_BOT_IN_API not set/false; skipping BotManager and auto backfill in API process")
+        logger.info(
+            "RUN_BOT_IN_API not set/false; skipping BotManager and auto backfill in API process"
+        )
         app.state.bot_manager = None
         app.state.bot_task = None
     else:
@@ -421,13 +514,19 @@ async def _initialize_backends():
 
                 sync_mongo = None
                 try:
-                    sync_mongo = MongoService(settings.MONGO_URI, settings.DB_NAME, settings.MONGO_CONNECT_TIMEOUT_MS)
+                    sync_mongo = MongoService(
+                        settings.MONGO_URI,
+                        settings.DB_NAME,
+                        settings.MONGO_CONNECT_TIMEOUT_MS,
+                    )
                     sync_mongo.connect()
                 except Exception:
                     sync_mongo = None
 
                 try:
-                    session_store = SessionStore(sync_mongo) if sync_mongo is not None else None
+                    session_store = (
+                        SessionStore(sync_mongo) if sync_mongo is not None else None
+                    )
                 except Exception:
                     session_store = None
             except Exception:
@@ -451,7 +550,11 @@ async def _initialize_backends():
                 for client in bot_mgr.clients:
                     # attach a sync MongoService to the client for handler convenience
                     try:
-                        sync_ms = MongoService(settings.MONGO_URI, settings.DB_NAME, settings.MONGO_CONNECT_TIMEOUT_MS)
+                        sync_ms = MongoService(
+                            settings.MONGO_URI,
+                            settings.DB_NAME,
+                            settings.MONGO_CONNECT_TIMEOUT_MS,
+                        )
                         sync_ms.connect()
                         setattr(client, "_mongo", sync_ms)
                         try:
@@ -465,7 +568,11 @@ async def _initialize_backends():
                     # attach the API's internal page store so the Pyrogram /search
                     # command works when bots run inside the API process
                     try:
-                        setattr(client, "_internal_page_store", _ensure_internal_page_store())
+                        setattr(
+                            client,
+                            "_internal_page_store",
+                            _ensure_internal_page_store(),
+                        )
                     except Exception:
                         pass
 
@@ -476,11 +583,14 @@ async def _initialize_backends():
                         pass
                     try:
                         if register_search_handlers:
-                            register_search_handlers(client, getattr(client, "_mongo", None))
+                            register_search_handlers(
+                                client, getattr(client, "_mongo", None)
+                            )
                     except Exception:
                         pass
                     try:
                         from app.handlers.admin import register_admin_handlers
+
                         register_admin_handlers(client, getattr(client, "_mongo", None))
                     except Exception:
                         pass
@@ -526,13 +636,18 @@ async def _initialize_backends():
         chat_list = []
         if getattr(settings, "BACKFILL_CHAT_IDS", None):
             try:
-                chat_list = [int(x.strip()) for x in settings.BACKFILL_CHAT_IDS.split(",") if x.strip()]
+                chat_list = [
+                    int(x.strip())
+                    for x in settings.BACKFILL_CHAT_IDS.split(",")
+                    if x.strip()
+                ]
             except Exception:
                 chat_list = []
         elif getattr(settings, "TARGET_CHAT_ID", None):
             chat_list = [settings.TARGET_CHAT_ID]
 
         if chat_list:
+
             async def _generate_and_persist_md(chat_id: int):
                 # Use the async Motor DB stored in app.state for reads and store markdown to a collection
                 db = getattr(app.state, "db", None)
@@ -548,10 +663,18 @@ async def _initialize_backends():
                         {"$match": {"chat_id": chat_id}},
                         {"$sort": {"message_thread_id": 1, "timestamp": 1}},
                     ]
-                    docs = await coll.aggregate(pipeline, allowDiskUse=True).to_list(length=100000)
+                    docs = await coll.aggregate(pipeline, allowDiskUse=True).to_list(
+                        length=100000
+                    )
                 except Exception:
-                    logger.exception("Aggregation with allowDiskUse failed; falling back to cursor sort")
-                    docs = await coll.find({"chat_id": chat_id}).sort([("message_thread_id", 1), ("timestamp", 1)]).to_list(length=100000)
+                    logger.exception(
+                        "Aggregation with allowDiskUse failed; falling back to cursor sort"
+                    )
+                    docs = (
+                        await coll.find({"chat_id": chat_id})
+                        .sort([("message_thread_id", 1), ("timestamp", 1)])
+                        .to_list(length=100000)
+                    )
                 groups = {}
                 for d in docs:
                     tid = d.get("message_thread_id")
@@ -584,7 +707,16 @@ async def _initialize_backends():
                 md_text = "\n".join(lines)
                 # persist into MongoDB collection `media_indexes`
                 try:
-                    await db.get_collection("media_indexes").update_one({"chat_id": int(chat_id)}, {"$set": {"markdown": md_text, "updated_at": datetime.utcnow()}}, upsert=True)
+                    await db.get_collection("media_indexes").update_one(
+                        {"chat_id": int(chat_id)},
+                        {
+                            "$set": {
+                                "markdown": md_text,
+                                "updated_at": datetime.utcnow(),
+                            }
+                        },
+                        upsert=True,
+                    )
                 except Exception:
                     pass
                 # write to disk (best-effort)
@@ -606,7 +738,12 @@ async def _initialize_backends():
                     bot_token = c.get("bot_token")
                     try:
                         if api_id and api_hash:
-                            pg_client = TGClient("backfill_remote", api_id=int(api_id), api_hash=str(api_hash), bot_token=bot_token if bot_token else None)
+                            pg_client = TGClient(
+                                "backfill_remote",
+                                api_id=int(api_id),
+                                api_hash=str(api_hash),
+                                bot_token=bot_token if bot_token else None,
+                            )
                             break
                         if bot_token:
                             pg_client = TGClient("backfill_remote", bot_token=bot_token)
@@ -621,7 +758,9 @@ async def _initialize_backends():
                         pg_client = TGClient("backfill_remote", bot_token=bt)
 
                 if pg_client is None:
-                    logger.warning("Auto backfill enabled but no Pyrogram credentials found; skipping auto backfill")
+                    logger.warning(
+                        "Auto backfill enabled but no Pyrogram credentials found; skipping auto backfill"
+                    )
                     return
 
                 # connect synchronous MongoService for backfill operations
@@ -644,20 +783,28 @@ async def _initialize_backends():
                     return
 
                 # run loop
-                interval = int(getattr(settings, "BACKFILL_INTERVAL_SECONDS", 21600) or 21600)
+                interval = int(
+                    getattr(settings, "BACKFILL_INTERVAL_SECONDS", 21600) or 21600
+                )
                 try:
                     while True:
                         for chat_id in chat_list:
                             try:
-                                logger.info("Auto backfill: processing chat {}", chat_id)
+                                logger.info(
+                                    "Auto backfill: processing chat {}", chat_id
+                                )
                                 await backfill_history(pg_client, mongo_sync, chat_id)
                                 # regenerate markdown index and persist
                                 try:
                                     await _generate_and_persist_md(chat_id)
                                 except Exception:
-                                    logger.exception("Failed to persist media index for {}", chat_id)
+                                    logger.exception(
+                                        "Failed to persist media index for {}", chat_id
+                                    )
                             except Exception:
-                                logger.exception("Auto backfill: error processing chat {}", chat_id)
+                                logger.exception(
+                                    "Auto backfill: error processing chat {}", chat_id
+                                )
                         await asyncio.sleep(interval)
                 finally:
                     try:
@@ -728,7 +875,10 @@ async def root_post(payload: dict = None):
     # If Telegram sends updates to the root path (no token in URL),
     # forward to the webhook handler using the configured bot token
     # when available. Otherwise, acknowledge.
-    logger.debug("root_post received payload keys: {}", list(payload.keys()) if isinstance(payload, dict) else type(payload))
+    logger.debug(
+        "root_post received payload keys: {}",
+        list(payload.keys()) if isinstance(payload, dict) else type(payload),
+    )
     if payload and ("message" in payload or "edited_message" in payload):
         # try to find a configured bot token
         token = None
@@ -738,7 +888,9 @@ async def root_post(payload: dict = None):
                 break
         if token:
             try:
-                logger.info("Forwarding root POST update to webhook handler using configured bot token (background)")
+                logger.info(
+                    "Forwarding root POST update to webhook handler using configured bot token (background)"
+                )
                 # schedule the webhook handler in background and return immediately
                 try:
                     asyncio.create_task(telegram_webhook(token, payload))
@@ -769,10 +921,14 @@ async def telegram_webhook_with_slash(token: str, update: dict):
 @app.post("/{token}/")
 async def telegram_webhook_token_root(token: str, update: dict):
     # Only handle obvious bot-token-like paths to avoid capturing other routes
-    configured_tokens = [c.get("bot_token") for c in settings.API_CREDENTIALS if c.get("bot_token")]
+    configured_tokens = [
+        c.get("bot_token") for c in settings.API_CREDENTIALS if c.get("bot_token")
+    ]
     # Accept when token contains a colon (typical bot token format) or matches configured token
     if ":" not in token and token not in configured_tokens:
-        return JSONResponse(status_code=404, content={"ok": False, "error": "unknown token"})
+        return JSONResponse(
+            status_code=404, content={"ok": False, "error": "unknown token"}
+        )
     # Forward to canonical handler
     return await telegram_webhook(token, update)
 
@@ -794,7 +950,9 @@ async def telegram_webhook_fallback(full_path: str, request: Request):
 
     # split segments and inspect each for a bot token-looking value
     segments = [s for s in raw_path.strip("/").split("/") if s]
-    configured_tokens = [c.get("bot_token") for c in settings.API_CREDENTIALS if c.get("bot_token")]
+    configured_tokens = [
+        c.get("bot_token") for c in settings.API_CREDENTIALS if c.get("bot_token")
+    ]
 
     for seg in reversed(segments):
         seg_dec = urllib.parse.unquote(seg)
@@ -804,12 +962,20 @@ async def telegram_webhook_fallback(full_path: str, request: Request):
             except Exception:
                 try:
                     raw_body = await request.body()
-                    body = json.loads(raw_body.decode("utf-8", errors="ignore") if isinstance(raw_body, (bytes, bytearray)) else raw_body)
+                    body = json.loads(
+                        raw_body.decode("utf-8", errors="ignore")
+                        if isinstance(raw_body, (bytes, bytearray))
+                        else raw_body
+                    )
                 except Exception:
                     body = {}
             return await telegram_webhook(seg_dec, body)
 
-    return JSONResponse(status_code=404, content={"ok": False, "error": "unknown token"})
+    return JSONResponse(
+        status_code=404, content={"ok": False, "error": "unknown token"}
+    )
+
+
 # Updates whose HTTP response was already sent. asyncio keeps only a weak
 # reference to a bare task, so an update collected mid-flight would be dropped
 # even though Telegram already considers it delivered.
@@ -859,7 +1025,9 @@ async def telegram_webhook(token: str, update: dict):
     creds = [c for c in settings.API_CREDENTIALS if c.get("bot_token") == token]
     if not creds:
         logger.warning("Received webhook for unknown token")
-        return JSONResponse(status_code=404, content={"ok": False, "error": "unknown token"})
+        return JSONResponse(
+            status_code=404, content={"ok": False, "error": "unknown token"}
+        )
     if not update_dedup.mark_seen(update.get("update_id")):
         logger.info("Duplicate delivery of update {} dropped", update.get("update_id"))
         return {"ok": True}
@@ -878,14 +1046,20 @@ async def _telegram_webhook_inner(token: str, update: dict):
     creds = [c for c in settings.API_CREDENTIALS if c.get("bot_token") == token]
     if not creds:
         logger.warning("Received webhook for unknown token")
-        return JSONResponse(status_code=404, content={"ok": False, "error": "unknown token"})
+        return JSONResponse(
+            status_code=404, content={"ok": False, "error": "unknown token"}
+        )
 
     # callback_query handling: support internal page navigation (IP|<page_id>)
     try:
         if update.get("callback_query"):
             cq = update.get("callback_query")
             data = cq.get("data") or ""
-            logger.info("webhook callback received data={} chat={}", data, cq.get("message", {}).get("chat", {}).get("id"))
+            logger.info(
+                "webhook callback received data={} chat={}",
+                data,
+                cq.get("message", {}).get("chat", {}).get("id"),
+            )
             # quick responder for noop (empty data)
             if not data:
                 try:
@@ -909,30 +1083,58 @@ async def _telegram_webhook_inner(token: str, update: dict):
                 try:
                     store = _ensure_internal_page_store()
                     if not store:
-                        await _answer_callback(token, cq.get("id"), text="Page not found")
+                        await _answer_callback(
+                            token, cq.get("id"), text="Page not found"
+                        )
                         return JSONResponse(status_code=200, content={"ok": True})
 
                     page = await store.get_page(page_id)
                     if not page:
-                        await _answer_callback(token, cq.get("id"), text="Page not found")
+                        await _answer_callback(
+                            token, cq.get("id"), text="Page not found"
+                        )
                         return JSONResponse(status_code=200, content={"ok": True})
                     try:
-                        logger.debug("webhook: fetched page id={} keys={}", page_id, list(page.keys()) if isinstance(page, dict) else None)
-                        logger.debug("webhook: page preview={}", (page.get("content")[:200] if page.get("content") else None))
-                        logger.debug("webhook: page query={} total_results={}", page.get("query"), page.get("total_results"))
+                        logger.debug(
+                            "webhook: fetched page id={} keys={}",
+                            page_id,
+                            list(page.keys()) if isinstance(page, dict) else None,
+                        )
+                        logger.debug(
+                            "webhook: page preview={}",
+                            (
+                                page.get("content")[:200]
+                                if page.get("content")
+                                else None
+                            ),
+                        )
+                        logger.debug(
+                            "webhook: page query={} total_results={}",
+                            page.get("query"),
+                            page.get("total_results"),
+                        )
                     except Exception:
                         pass
 
                     # Render stored page using shared helper (builds body + keyboard
                     # and applies truncation rules). Fallback to raw conversion on error.
                     try:
-                        text_to_send, kb_rows = render_paginated_page(page, query_override=page.get("query"))
+                        text_to_send, kb_rows = render_paginated_page(
+                            page, query_override=page.get("query")
+                        )
                     except Exception:
                         try:
                             page_query = page.get("query") or ""
                             content_md = md_to_markdown(page.get("content") or "")
                             header = (
-                                "*" + t("results_header", query=_escape_markdown(page_query), total=page.get('total_results') or 0, text=page_query) + "*\n\n"
+                                "*"
+                                + t(
+                                    "results_header",
+                                    query=_escape_markdown(page_query),
+                                    total=page.get("total_results") or 0,
+                                    text=page_query,
+                                )
+                                + "*\n\n"
                                 if page_query
                                 else ""
                             )
@@ -944,7 +1146,12 @@ async def _telegram_webhook_inner(token: str, update: dict):
                                 row = []
                                 for p in gp[:8]:
                                     pid = p.get("page_id") if isinstance(p, dict) else p
-                                    row.append({"text": str(len(kb_rows) + len(row) + 1), "callback_data": f"IP|{pid}"})
+                                    row.append(
+                                        {
+                                            "text": str(len(kb_rows) + len(row) + 1),
+                                            "callback_data": f"IP|{pid}",
+                                        }
+                                    )
                                 if row:
                                     kb_rows.append(row)
                         except Exception:
@@ -968,7 +1175,11 @@ async def _telegram_webhook_inner(token: str, update: dict):
                     except Exception:
                         chat_obj = None
 
-                    if chat_obj and chat_obj.get("id") and len((text_to_send or "")) > MAX_MSG_CFG:
+                    if (
+                        chat_obj
+                        and chat_obj.get("id")
+                        and len((text_to_send or "")) > MAX_MSG_CFG
+                    ):
                         try:
                             # Send full Markdown content as separate chat messages
                             chat_id_target = chat_obj.get("id")
@@ -976,22 +1187,38 @@ async def _telegram_webhook_inner(token: str, update: dict):
                             try:
                                 total_parts_gp = len(gp)
                                 for pi, part in enumerate(gp, start=1):
-                                    part_lines = (part.get("content") or "").splitlines()
-                                    part_header = f"{header} — " + t("part_suffix", part=pi, parts=total_parts_gp)
+                                    part_lines = (
+                                        part.get("content") or ""
+                                    ).splitlines()
+                                    part_header = f"{header} — " + t(
+                                        "part_suffix", part=pi, parts=total_parts_gp
+                                    )
                                     rm = reply_markup if pi == 1 else None
-                                    await _send_markdown_full(token, chat_id_target, part_header, part_lines, reply_markup=rm)
+                                    await _send_markdown_full(
+                                        token,
+                                        chat_id_target,
+                                        part_header,
+                                        part_lines,
+                                        reply_markup=rm,
+                                    )
                                 return
                             except Exception:
-                                logger.exception("api_search: failed while streaming saved parts per-page")
+                                logger.exception(
+                                    "api_search: failed while streaming saved parts per-page"
+                                )
                             except Exception:
                                 pass
                             return JSONResponse(status_code=200, content={"ok": True})
                         except Exception:
-                            logger.exception("callback: failed to send full page chunks, will attempt edit fallback")
+                            logger.exception(
+                                "callback: failed to send full page chunks, will attempt edit fallback"
+                            )
 
                     # edit the message in place
                     try:
-                        edit_url = f"https://api.telegram.org/bot{token}/editMessageText"
+                        edit_url = (
+                            f"https://api.telegram.org/bot{token}/editMessageText"
+                        )
                         payload = {"text": text_to_send, "parse_mode": "Markdown"}
                         # If message exists, target it; otherwise use inline_message_id
                         msg = cq.get("message")
@@ -1009,33 +1236,62 @@ async def _telegram_webhook_inner(token: str, update: dict):
                             try:
                                 # Log the outgoing payload (masked by logger sink)
                                 try:
-                                    logger.debug("callback editMessageText request payload: {}", json.dumps(payload, ensure_ascii=False)[:2000])
+                                    logger.debug(
+                                        "callback editMessageText request payload: {}",
+                                        json.dumps(payload, ensure_ascii=False)[:2000],
+                                    )
                                 except Exception:
-                                    logger.debug("callback editMessageText request payload (unserializable)")
-                                resp = await client.post(edit_url, json=payload, timeout=10)
+                                    logger.debug(
+                                        "callback editMessageText request payload (unserializable)"
+                                    )
+                                resp = await client.post(
+                                    edit_url, json=payload, timeout=10
+                                )
                             except Exception:
                                 resp = None
                         try:
                             if resp is None:
-                                logger.exception("callback edit request failed: no response")
+                                logger.exception(
+                                    "callback edit request failed: no response"
+                                )
                             else:
                                 # Log full response body for diagnosis (truncated)
                                 try:
                                     body_text = resp.text or ""
                                 except Exception:
                                     body_text = ""
-                                logger.info("callback editMessageText response: status={} body={}", resp.status_code, body_text[:800])
+                                logger.info(
+                                    "callback editMessageText response: status={} body={}",
+                                    resp.status_code,
+                                    body_text[:800],
+                                )
                                 if resp.status_code == 200:
                                     pass
                                 else:
                                     # Log edit response details for diagnosis
                                     try:
-                                        logger.debug("callback editMessageText response: status={} body={} request_payload={}", resp.status_code, body_text[:2000], json.dumps(payload, ensure_ascii=False)[:2000])
+                                        logger.debug(
+                                            "callback editMessageText response: status={} body={} request_payload={}",
+                                            resp.status_code,
+                                            body_text[:2000],
+                                            json.dumps(payload, ensure_ascii=False)[
+                                                :2000
+                                            ],
+                                        )
                                     except Exception:
-                                        logger.debug("callback editMessageText response: status={} body={}", resp.status_code, body_text[:2000])
+                                        logger.debug(
+                                            "callback editMessageText response: status={} body={}",
+                                            resp.status_code,
+                                            body_text[:2000],
+                                        )
 
-                                    if payload.get("parse_mode") and resp.status_code == 400 and (
-                                        "can't parse entities" in body_text.lower() or "parse entities" in body_text.lower()
+                                    if (
+                                        payload.get("parse_mode")
+                                        and resp.status_code == 400
+                                        and (
+                                            "can't parse entities" in body_text.lower()
+                                            or "parse entities" in body_text.lower()
+                                        )
                                     ):
                                         try:
                                             raw_text = payload.get("text", "")
@@ -1044,7 +1300,9 @@ async def _telegram_webhook_inner(token: str, update: dict):
                                                 from app.utils.helpers import md_to_html
 
                                                 try:
-                                                    html_text = md_to_html(raw_text, one_per_line=True)
+                                                    html_text = md_to_html(
+                                                        raw_text, one_per_line=True
+                                                    )
                                                 except Exception:
                                                     html_text = None
                                             except Exception:
@@ -1053,32 +1311,65 @@ async def _telegram_webhook_inner(token: str, update: dict):
                                             if html_text:
                                                 fallback_html = {}
                                                 if "chat_id" in payload:
-                                                    fallback_html["chat_id"] = payload.get("chat_id")
+                                                    fallback_html["chat_id"] = (
+                                                        payload.get("chat_id")
+                                                    )
                                                 if "message_id" in payload:
-                                                    fallback_html["message_id"] = payload.get("message_id")
+                                                    fallback_html["message_id"] = (
+                                                        payload.get("message_id")
+                                                    )
                                                 if "inline_message_id" in payload:
-                                                    fallback_html["inline_message_id"] = payload.get("inline_message_id")
+                                                    fallback_html[
+                                                        "inline_message_id"
+                                                    ] = payload.get("inline_message_id")
                                                 fallback_html["text"] = html_text
                                                 fallback_html["parse_mode"] = "HTML"
                                                 if "reply_markup" in payload:
-                                                    fallback_html["reply_markup"] = payload.get("reply_markup")
+                                                    fallback_html["reply_markup"] = (
+                                                        payload.get("reply_markup")
+                                                    )
                                                 try:
                                                     try:
-                                                        logger.debug("callback editMessageText HTML fallback payload: {}", json.dumps(fallback_html, ensure_ascii=False)[:2000])
+                                                        logger.debug(
+                                                            "callback editMessageText HTML fallback payload: {}",
+                                                            json.dumps(
+                                                                fallback_html,
+                                                                ensure_ascii=False,
+                                                            )[:2000],
+                                                        )
                                                     except Exception:
-                                                        logger.debug("callback editMessageText HTML fallback payload (unserializable)")
-                                                    async with httpx.AsyncClient() as client2:
-                                                        resp2 = await client2.post(edit_url, json=fallback_html, timeout=10)
+                                                        logger.debug(
+                                                            "callback editMessageText HTML fallback payload (unserializable)"
+                                                        )
+                                                    async with (
+                                                        httpx.AsyncClient() as client2
+                                                    ):
+                                                        resp2 = await client2.post(
+                                                            edit_url,
+                                                            json=fallback_html,
+                                                            timeout=10,
+                                                        )
                                                     try:
-                                                        logger.debug("callback editMessageText HTML fallback response: status={} body={}", resp2.status_code, (resp2.text or "")[:2000])
+                                                        logger.debug(
+                                                            "callback editMessageText HTML fallback response: status={} body={}",
+                                                            resp2.status_code,
+                                                            (resp2.text or "")[:2000],
+                                                        )
                                                     except Exception:
-                                                        logger.debug("callback editMessageText HTML fallback response logged")
-                                                    if resp2 is not None and resp2.status_code == 200:
+                                                        logger.debug(
+                                                            "callback editMessageText HTML fallback response logged"
+                                                        )
+                                                    if (
+                                                        resp2 is not None
+                                                        and resp2.status_code == 200
+                                                    ):
                                                         # success
                                                         pass
                                                     else:
                                                         # Fall back to plain-text label-only edit
-                                                        raise Exception("HTML fallback failed")
+                                                        raise Exception(
+                                                            "HTML fallback failed"
+                                                        )
                                                 except Exception:
                                                     # proceed to plain-text fallback below
                                                     raise
@@ -1086,37 +1377,72 @@ async def _telegram_webhook_inner(token: str, update: dict):
                                             try:
                                                 unescaped = md_to_plain_text(raw_text)
                                             except Exception:
-                                                unescaped = unescape_for_plain_text(raw_text)
+                                                unescaped = unescape_for_plain_text(
+                                                    raw_text
+                                                )
                                         except Exception:
                                             try:
-                                                unescaped = md_to_plain_text(payload.get("text", ""))
+                                                unescaped = md_to_plain_text(
+                                                    payload.get("text", "")
+                                                )
                                             except Exception:
                                                 unescaped = payload.get("text", "")
                                         fallback = {}
                                         if "chat_id" in payload:
                                             fallback["chat_id"] = payload.get("chat_id")
                                         if "message_id" in payload:
-                                            fallback["message_id"] = payload.get("message_id")
+                                            fallback["message_id"] = payload.get(
+                                                "message_id"
+                                            )
                                         if "inline_message_id" in payload:
-                                            fallback["inline_message_id"] = payload.get("inline_message_id")
+                                            fallback["inline_message_id"] = payload.get(
+                                                "inline_message_id"
+                                            )
                                         fallback["text"] = unescaped
                                         if "reply_markup" in payload:
-                                            fallback["reply_markup"] = payload.get("reply_markup")
+                                            fallback["reply_markup"] = payload.get(
+                                                "reply_markup"
+                                            )
                                             try:
                                                 try:
-                                                    logger.debug("callback editMessageText fallback payload: {}", json.dumps(fallback, ensure_ascii=False)[:2000])
+                                                    logger.debug(
+                                                        "callback editMessageText fallback payload: {}",
+                                                        json.dumps(
+                                                            fallback, ensure_ascii=False
+                                                        )[:2000],
+                                                    )
                                                 except Exception:
-                                                    logger.debug("callback editMessageText fallback payload (unserializable)")
-                                                async with httpx.AsyncClient() as client2:
-                                                    resp2 = await client2.post(edit_url, json=fallback, timeout=10)
+                                                    logger.debug(
+                                                        "callback editMessageText fallback payload (unserializable)"
+                                                    )
+                                                async with (
+                                                    httpx.AsyncClient() as client2
+                                                ):
+                                                    resp2 = await client2.post(
+                                                        edit_url,
+                                                        json=fallback,
+                                                        timeout=10,
+                                                    )
                                                 try:
-                                                    logger.debug("callback editMessageText fallback response: status={} body={}", resp2.status_code, (resp2.text or "")[:2000])
+                                                    logger.debug(
+                                                        "callback editMessageText fallback response: status={} body={}",
+                                                        resp2.status_code,
+                                                        (resp2.text or "")[:2000],
+                                                    )
                                                 except Exception:
-                                                    logger.debug("callback editMessageText fallback response logged")
+                                                    logger.debug(
+                                                        "callback editMessageText fallback response logged"
+                                                    )
                                             except Exception:
-                                                logger.exception("callback edit fallback failed")
+                                                logger.exception(
+                                                    "callback edit fallback failed"
+                                                )
                                     else:
-                                        logger.error("editMessageText failed status={} body={}", resp.status_code, body_text[:400])
+                                        logger.error(
+                                            "editMessageText failed status={} body={}",
+                                            resp.status_code,
+                                            body_text[:400],
+                                        )
                         except Exception:
                             logger.exception("callback edit error handling response")
                         try:
@@ -1125,7 +1451,9 @@ async def _telegram_webhook_inner(token: str, update: dict):
                             pass
                     except Exception:
                         try:
-                            await _answer_callback(token, cq.get("id"), text="Unable to load page")
+                            await _answer_callback(
+                                token, cq.get("id"), text="Unable to load page"
+                            )
                         except Exception:
                             pass
                     return JSONResponse(status_code=200, content={"ok": True})
@@ -1163,7 +1491,13 @@ async def _telegram_webhook_inner(token: str, update: dict):
     text = (message.get("text") or message.get("caption") or "").strip()
     chat_id = (message.get("chat") or {}).get("id")
     text_trunc = (text[:120] + "...") if len(text) > 120 else text
-    logger.info("webhook token={} update_id={} chat={} text={}", "[REDACTED]", update_id, chat_id, text_trunc)
+    logger.info(
+        "webhook token={} update_id={} chat={} text={}",
+        "[REDACTED]",
+        update_id,
+        chat_id,
+        text_trunc,
+    )
     if not text:
         logger.debug("No text/caption in incoming update, ignoring")
         return {"ok": True}
@@ -1206,8 +1540,12 @@ async def _telegram_webhook_inner(token: str, update: dict):
         else:
             try:
                 total = await db.get_collection("files").estimated_document_count()
-                dups = await db.get_collection("files").count_documents({"is_duplicate": True})
-                await _send_tg(token, chat_id, f"Total files: {total}\nDuplicates: {dups}")
+                dups = await db.get_collection("files").count_documents(
+                    {"is_duplicate": True}
+                )
+                await _send_tg(
+                    token, chat_id, f"Total files: {total}\nDuplicates: {dups}"
+                )
             except Exception as exc:
                 logger.exception("/stats handler failed: {}", exc)
                 await _send_tg(token, chat_id, "Stats: error")
@@ -1307,14 +1645,20 @@ async def _telegram_webhook_inner(token: str, update: dict):
             env["PYTHONPATH"] = project_root + (os.pathsep + prev if prev else "")
 
             async def _spawn_and_log(cmd, env, cwd):
-                proc = await asyncio.create_subprocess_exec(*cmd, env=env, cwd=cwd, stdout=PIPE, stderr=PIPE)
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, env=env, cwd=cwd, stdout=PIPE, stderr=PIPE
+                )
 
                 # notify owner immediately that the subprocess has started
                 try:
                     owner = settings.OWNER_ID
                     if owner and int(owner) != int(chat_id):
                         try:
-                            await _send_tg(token, int(owner), f"Backfill subprocess started for {target_chat_id} (requested by {chat_id})")
+                            await _send_tg(
+                                token,
+                                int(owner),
+                                f"Backfill subprocess started for {target_chat_id} (requested by {chat_id})",
+                            )
                         except Exception:
                             pass
                 except Exception:
@@ -1347,7 +1691,11 @@ async def _telegram_webhook_inner(token: str, update: dict):
             try:
                 owner = settings.OWNER_ID
                 if owner and int(owner) != int(chat_id):
-                    await _send_tg(token, int(owner), f"Reindex scheduled for {target_chat_id} by {chat_id}")
+                    await _send_tg(
+                        token,
+                        int(owner),
+                        f"Reindex scheduled for {target_chat_id} by {chat_id}",
+                    )
             except Exception:
                 pass
         except Exception as exc:
@@ -1356,7 +1704,11 @@ async def _telegram_webhook_inner(token: str, update: dict):
             try:
                 owner = settings.OWNER_ID
                 if owner:
-                    await _send_tg(token, int(owner), f"Failed to schedule reindex for {target}: {exc}")
+                    await _send_tg(
+                        token,
+                        int(owner),
+                        f"Failed to schedule reindex for {target}: {exc}",
+                    )
             except Exception:
                 pass
         return {"ok": True}
@@ -1374,7 +1726,12 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 masked = (token[:4] + "..." + token[-4:]) if len(token) > 8 else token
         except Exception:
             masked = "[unknown]"
-        logger.info("_process_search_and_send start: token={} chat={} query={}", masked, chat_id, (query or "")[:200])
+        logger.info(
+            "_process_search_and_send start: token={} chat={} query={}",
+            masked,
+            chat_id,
+            (query or "")[:200],
+        )
     except Exception:
         pass
 
@@ -1394,20 +1751,36 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         results = res.get("results", [])
         total = res.get("total", 0)
         if not results:
-            reply_text = t("results_none_for", query=_escape_markdown(query), text=query)
+            reply_text = t(
+                "results_none_for", query=_escape_markdown(query), text=query
+            )
             # Short-circuit: send a simple 'no results' reply immediately
             try:
                 await _send_tg(token, chat_id, reply_text, parse_mode="Markdown")
                 try:
-                    logger.info("_process_search_and_send: sent no-results to chat {}", chat_id)
+                    logger.info(
+                        "_process_search_and_send: sent no-results to chat {}", chat_id
+                    )
                 except Exception:
                     pass
             except Exception:
-                logger.exception("_process_search_and_send: failed to send no-results message")
+                logger.exception(
+                    "_process_search_and_send: failed to send no-results message"
+                )
             return
         else:
-            lines = ["*" + t("results_header", query=_escape_markdown(query), total=total, text=query) + "*"]
+            lines = [
+                "*"
+                + t(
+                    "results_header",
+                    query=_escape_markdown(query),
+                    total=total,
+                    text=query,
+                )
+                + "*"
+            ]
             from app.utils.helpers import sanitize_filename_for_display
+
             for i, r in enumerate(results, start=1):
                 raw_fname = r.get("filename") or "-"
                 display_raw = sanitize_filename_for_display(raw_fname)
@@ -1423,7 +1796,13 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
     # Prepare a default header early so later branches can reference it
     # without causing UnboundLocalError (some paths assign `header` later).
     try:
-        header = "*" + t("results_header", query=_escape_markdown(query), total=total, text=query) + "*"
+        header = (
+            "*"
+            + t(
+                "results_header", query=_escape_markdown(query), total=total, text=query
+            )
+            + "*"
+        )
     except Exception:
         header = "*" + t("results_header", query=query, total=total, text=query) + "*"
 
@@ -1434,7 +1813,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
     # in other branches below.
 
     try:
-        logger.info("_process_search_and_send: total={} results_len={}", total, len(results))
+        logger.info(
+            "_process_search_and_send: total={} results_len={}", total, len(results)
+        )
         if len(reply_text) <= MAX_MSG:
             # Build a HTML message body where each result is an inline <a> link
             # so users can click links directly in the message text.
@@ -1445,11 +1826,22 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 # Markdown link [Title](URL). We keep the header as a bold
                 # Markdown token and convert the result list via
                 # `md_to_markdown` so links and labels are escaped properly.
-                header = "*" + t("results_header", query=_escape_markdown(query), total=total, text=query) + "*"
+                header = (
+                    "*"
+                    + t(
+                        "results_header",
+                        query=_escape_markdown(query),
+                        total=total,
+                        text=query,
+                    )
+                    + "*"
+                )
                 md_lines = []
                 for i, r in enumerate(results, start=1):
                     raw_fname = (r.get("filename") or "-").replace("\n", " ")
-                    display_raw = raw_fname if len(raw_fname) <= 80 else raw_fname[:77] + "..."
+                    display_raw = (
+                        raw_fname if len(raw_fname) <= 80 else raw_fname[:77] + "..."
+                    )
                     url = ""
                     try:
                         chat_id_r = r.get("chat_id")
@@ -1503,11 +1895,19 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                             for r in results:
                                 ref = {}
                                 try:
-                                    ref["chat_id"] = int(r.get("chat_id")) if r.get("chat_id") is not None else None
+                                    ref["chat_id"] = (
+                                        int(r.get("chat_id"))
+                                        if r.get("chat_id") is not None
+                                        else None
+                                    )
                                 except Exception:
                                     ref["chat_id"] = None
                                 try:
-                                    ref["message_id"] = int(r.get("message_id")) if r.get("message_id") is not None else None
+                                    ref["message_id"] = (
+                                        int(r.get("message_id"))
+                                        if r.get("message_id") is not None
+                                        else None
+                                    )
                                 except Exception:
                                     ref["message_id"] = None
                                 try:
@@ -1525,7 +1925,11 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                     ref["filename"] = ""
                                     ref["filename_norm"] = ""
                                 try:
-                                    ref["match_score"] = float(r.get("_score")) if r.get("_score") is not None else None
+                                    ref["match_score"] = (
+                                        float(r.get("_score"))
+                                        if r.get("_score") is not None
+                                        else None
+                                    )
                                 except Exception:
                                     ref["match_score"] = None
                                 # heuristic match type: prefer filename-based detection using normalized keys
@@ -1539,7 +1943,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                         ref["match_type"] = "filename_substring"
                                     else:
                                         tt = r.get("title_tokens") or []
-                                        tt_lower = [t.lower() for t in tt if isinstance(t, str)]
+                                        tt_lower = [
+                                            t.lower() for t in tt if isinstance(t, str)
+                                        ]
                                         if any(tok in qnorm for tok in tt_lower):
                                             ref["match_type"] = "title_token"
                                         else:
@@ -1550,16 +1956,27 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                         except Exception:
                             md_line_refs = []
 
-                        chunks_with_refs = chunk_lines_with_refs(md_lines, md_line_refs, CHUNK_CHAR_LIMIT)
+                        chunks_with_refs = chunk_lines_with_refs(
+                            md_lines, md_line_refs, CHUNK_CHAR_LIMIT
+                        )
                         total_parts = len(chunks_with_refs)
                         total_results = len(md_lines)
                         # Bind a clean header string to the saved page parts
                         try:
-                            page_header = t("results_header", query=query, total=total_results, text=query)
+                            page_header = t(
+                                "results_header",
+                                query=query,
+                                total=total_results,
+                                text=query,
+                            )
                         except Exception:
-                            page_header = t("results_header_plain", query=query, text=query)
+                            page_header = t(
+                                "results_header_plain", query=query, text=query
+                            )
                         pages = []
-                        for part_index, (chunk, chunk_refs) in enumerate(chunks_with_refs):
+                        for part_index, (chunk, chunk_refs) in enumerate(
+                            chunks_with_refs
+                        ):
                             try:
                                 saved = await store.save_raw_page(
                                     query,
@@ -1575,12 +1992,20 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                 )
                                 pages.append(saved.get("page_id"))
                             except Exception:
-                                logger.exception("api_search: failed to save page part {}/{}", part_index + 1, total_parts)
+                                logger.exception(
+                                    "api_search: failed to save page part {}/{}",
+                                    part_index + 1,
+                                    total_parts,
+                                )
 
                         # Build top_links from preview results and persist
                         top_links = []
                         try:
-                            from app.utils.helpers import sanitize_filename_for_display, normalize_filename_key
+                            from app.utils.helpers import (
+                                sanitize_filename_for_display,
+                                normalize_filename_key,
+                            )
+
                             seen_urls = set()
                             for ii, rr in enumerate(results[:max_inline], start=1):
                                 raw_fname = rr.get("filename") or "-"
@@ -1591,7 +2016,11 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                     message_id = rr.get("message_id")
                                     if chat_id_r and message_id:
                                         s = str(chat_id_r)
-                                        base = s[4:] if s.startswith("-100") else s.lstrip("-")
+                                        base = (
+                                            s[4:]
+                                            if s.startswith("-100")
+                                            else s.lstrip("-")
+                                        )
                                         url = f"https://t.me/c/{base}/{message_id}"
                                 except Exception:
                                     url = ""
@@ -1601,22 +2030,39 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                 except Exception:
                                     key = ""
                                 if url and url not in seen_urls:
-                                    top_links.append({"text": f"{ii}) {display_raw}", "url": url})
+                                    top_links.append(
+                                        {"text": f"{ii}) {display_raw}", "url": url}
+                                    )
                                     seen_urls.add(url)
                         except Exception:
                             top_links = []
 
                         try:
                             store_for_links = _ensure_internal_page_store()
-                            logger.info("api_search: set_top_links store={} pages={} top_links={}", "present" if store_for_links else "absent", len(pages), len(top_links))
+                            logger.info(
+                                "api_search: set_top_links store={} pages={} top_links={}",
+                                "present" if store_for_links else "absent",
+                                len(pages),
+                                len(top_links),
+                            )
                             if store_for_links:
                                 try:
-                                    await store_for_links.set_top_links(pages[0], top_links)
-                                    logger.info("api_search: set_top_links succeeded for page {}", pages[0])
+                                    await store_for_links.set_top_links(
+                                        pages[0], top_links
+                                    )
+                                    logger.info(
+                                        "api_search: set_top_links succeeded for page {}",
+                                        pages[0],
+                                    )
                                 except Exception:
-                                    logger.exception("api_search: set_top_links failed for page {}", pages[0])
+                                    logger.exception(
+                                        "api_search: set_top_links failed for page {}",
+                                        pages[0],
+                                    )
                         except Exception:
-                            logger.exception("api_search: error checking store_for_links")
+                            logger.exception(
+                                "api_search: error checking store_for_links"
+                            )
 
                         # fetch the first page and send it as a single message with
                         # nav + top-links + part buttons. If rendering or sending
@@ -1633,7 +2079,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                         gp = first.get("group_pages") or [first]
                                         md_all_lines = []
                                         for part in gp:
-                                            md_all_lines.extend((part.get("content") or "").splitlines())
+                                            md_all_lines.extend(
+                                                (part.get("content") or "").splitlines()
+                                            )
 
                                         # Build top-links keyboard (two-per-row)
                                         tlinks = first.get("top_links") or []
@@ -1641,7 +2089,10 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                         row = []
                                         for tl in tlinks:
                                             try:
-                                                btn = {"text": (tl.get("text") or "")[:60], "url": tl.get("url")}
+                                                btn = {
+                                                    "text": (tl.get("text") or "")[:60],
+                                                    "url": tl.get("url"),
+                                                }
                                                 row.append(btn)
                                                 if len(row) >= 2:
                                                     kb_rows.append(row)
@@ -1653,34 +2104,75 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
 
                                         # (button removed) do not append 'Open formatted results' button
 
-                                        reply_markup = {"inline_keyboard": kb_rows} if kb_rows else None
+                                        reply_markup = (
+                                            {"inline_keyboard": kb_rows}
+                                            if kb_rows
+                                            else None
+                                        )
 
                                         # Send each saved part as its own Markdown chunked message
                                         try:
                                             total_parts_gp = len(gp)
                                             for pi, part in enumerate(gp, start=1):
-                                                part_lines = (part.get("content") or "").splitlines()
-                                                part_header = f"{header} — " + t("part_suffix", part=pi, parts=total_parts_gp)
+                                                part_lines = (
+                                                    part.get("content") or ""
+                                                ).splitlines()
+                                                part_header = f"{header} — " + t(
+                                                    "part_suffix",
+                                                    part=pi,
+                                                    parts=total_parts_gp,
+                                                )
                                                 # attach reply markup only to the first part
                                                 rm = reply_markup if pi == 1 else None
-                                                await _send_markdown_full(token, chat_id, part_header, part_lines, reply_markup=rm)
+                                                await _send_markdown_full(
+                                                    token,
+                                                    chat_id,
+                                                    part_header,
+                                                    part_lines,
+                                                    reply_markup=rm,
+                                                )
                                             return
                                         except Exception:
-                                            logger.exception("api_search: failed while streaming saved parts per-page")
+                                            logger.exception(
+                                                "api_search: failed while streaming saved parts per-page"
+                                            )
                                     except Exception:
-                                        logger.exception("api_search: failed to render/send saved full pages")
+                                        logger.exception(
+                                            "api_search: failed to render/send saved full pages"
+                                        )
                                         # Best-effort compact fallback so users can open the saved page
                                         try:
-                                            fallback_kb = {"inline_keyboard": [[{"text": "View full list", "callback_data": f"IP|{pages[0]}"}]]}
-                                            await _send_tg(token, chat_id, "Full results available — tap to open.", parse_mode=None, reply_markup=fallback_kb)
+                                            fallback_kb = {
+                                                "inline_keyboard": [
+                                                    [
+                                                        {
+                                                            "text": "View full list",
+                                                            "callback_data": f"IP|{pages[0]}",
+                                                        }
+                                                    ]
+                                                ]
+                                            }
+                                            await _send_tg(
+                                                token,
+                                                chat_id,
+                                                "Full results available — tap to open.",
+                                                parse_mode=None,
+                                                reply_markup=fallback_kb,
+                                            )
                                             return
                                         except Exception:
-                                            logger.exception("api_search: fallback button send failed")
+                                            logger.exception(
+                                                "api_search: fallback button send failed"
+                                            )
                             except Exception:
-                                logger.exception("api_search: failed to load first saved page")
+                                logger.exception(
+                                    "api_search: failed to load first saved page"
+                                )
 
                     except Exception:
-                        logger.exception("api_search: failed to create/persist internal pages")
+                        logger.exception(
+                            "api_search: failed to create/persist internal pages"
+                        )
 
                 # Fallback: build the inline Markdown body if we didn't use stored pages
                 body_md = header + "\n\n" + md_to_markdown(body_md_raw)
@@ -1694,6 +2186,7 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 rows = []
                 try:
                     from app.utils.helpers import sanitize_filename_for_display
+
                     seen_urls = set()
                     for i, r in enumerate(results[:max_inline], start=1):
                         raw_fname = r.get("filename") or "-"
@@ -1720,7 +2213,12 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 try:
                     # Force usage of internal page store (create in-memory fallback if needed)
                     store = _ensure_internal_page_store()
-                    logger.info("api_search: total={} max_inline={} internal_page_store={}", total, max_inline, "present" if store else "absent")
+                    logger.info(
+                        "api_search: total={} max_inline={} internal_page_store={}",
+                        total,
+                        max_inline,
+                        "present" if store else "absent",
+                    )
                     toks = tokenize_query(query) if store else []
 
                     # Determine the full set of results to include in pages
@@ -1729,7 +2227,11 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                     if store:
                         try:
                             full_res = await api_search(q=query, page=1, per_page=5000)
-                            full_results = full_res.get("results", []) if isinstance(full_res, dict) else []
+                            full_results = (
+                                full_res.get("results", [])
+                                if isinstance(full_res, dict)
+                                else []
+                            )
                         except Exception:
                             full_results = results
                     else:
@@ -1737,7 +2239,11 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
 
                     # build markdown lines for full results
                     md_lines = []
-                    from app.utils.helpers import sanitize_filename_for_display, normalize_filename_key
+                    from app.utils.helpers import (
+                        sanitize_filename_for_display,
+                        normalize_filename_key,
+                    )
+
                     seen_urls = set()
                     for i, r in enumerate(full_results, start=1):
                         raw_fname = r.get("filename") or "-"
@@ -1782,11 +2288,19 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                             for r in full_results:
                                 ref = {}
                                 try:
-                                    ref["chat_id"] = int(r.get("chat_id")) if r.get("chat_id") is not None else None
+                                    ref["chat_id"] = (
+                                        int(r.get("chat_id"))
+                                        if r.get("chat_id") is not None
+                                        else None
+                                    )
                                 except Exception:
                                     ref["chat_id"] = None
                                 try:
-                                    ref["message_id"] = int(r.get("message_id")) if r.get("message_id") is not None else None
+                                    ref["message_id"] = (
+                                        int(r.get("message_id"))
+                                        if r.get("message_id") is not None
+                                        else None
+                                    )
                                 except Exception:
                                     ref["message_id"] = None
                                 try:
@@ -1803,7 +2317,11 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                     ref["filename"] = ""
                                     ref["filename_norm"] = ""
                                 try:
-                                    ref["match_score"] = float(r.get("_score")) if r.get("_score") is not None else None
+                                    ref["match_score"] = (
+                                        float(r.get("_score"))
+                                        if r.get("_score") is not None
+                                        else None
+                                    )
                                 except Exception:
                                     ref["match_score"] = None
                                 try:
@@ -1816,7 +2334,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                         ref["match_type"] = "filename_substring"
                                     else:
                                         tt = r.get("title_tokens") or []
-                                        tt_lower = [t.lower() for t in tt if isinstance(t, str)]
+                                        tt_lower = [
+                                            t.lower() for t in tt if isinstance(t, str)
+                                        ]
                                         if any(tok in qnorm for tok in tt_lower):
                                             ref["match_type"] = "title_token"
                                         else:
@@ -1827,18 +2347,35 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                         except Exception:
                             md_line_refs = []
 
-                        chunks_with_refs = chunk_lines_with_refs(md_lines, md_line_refs, CHUNK_CHAR_LIMIT)
+                        chunks_with_refs = chunk_lines_with_refs(
+                            md_lines, md_line_refs, CHUNK_CHAR_LIMIT
+                        )
 
                         total_parts = len(chunks_with_refs)
                         total_results = len(md_lines)
                         try:
-                            page_header = t("results_header", query=query, total=total_results, text=query)
+                            page_header = t(
+                                "results_header",
+                                query=query,
+                                total=total_results,
+                                text=query,
+                            )
                         except Exception:
-                            page_header = t("results_header_plain", query=query, text=query)
-                        for part_index, (chunk, chunk_refs) in enumerate(chunks_with_refs):
+                            page_header = t(
+                                "results_header_plain", query=query, text=query
+                            )
+                        for part_index, (chunk, chunk_refs) in enumerate(
+                            chunks_with_refs
+                        ):
                             try:
                                 try:
-                                    logger.debug("api_search: saving page part {}/{} query={} preview={}", part_index + 1, total_parts, query, (chunk[:200] if chunk else None))
+                                    logger.debug(
+                                        "api_search: saving page part {}/{} query={} preview={}",
+                                        part_index + 1,
+                                        total_parts,
+                                        query,
+                                        (chunk[:200] if chunk else None),
+                                    )
                                 except Exception:
                                     pass
                                 saved = await store.save_raw_page(
@@ -1855,9 +2392,18 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                 )
                                 pid = saved.get("page_id")
                                 pages.append(pid)
-                                logger.info("api_search: saved internal page {} ({}/{})", pid, part_index + 1, total_parts)
+                                logger.info(
+                                    "api_search: saved internal page {} ({}/{})",
+                                    pid,
+                                    part_index + 1,
+                                    total_parts,
+                                )
                             except Exception:
-                                logger.exception("api_search: failed to save page part {}/{}", part_index + 1, total_parts)
+                                logger.exception(
+                                    "api_search: failed to save page part {}/{}",
+                                    part_index + 1,
+                                    total_parts,
+                                )
                 except Exception:
                     pages = []
 
@@ -1870,35 +2416,62 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                         top_links = []
                         try:
                             for ii, rr in enumerate(full_results[:max_inline], start=1):
-                                raw_fname = (rr.get("filename") or "-").replace("\n", " ")
-                                display_raw = raw_fname if len(raw_fname) <= 80 else raw_fname[:77] + "..."
+                                raw_fname = (rr.get("filename") or "-").replace(
+                                    "\n", " "
+                                )
+                                display_raw = (
+                                    raw_fname
+                                    if len(raw_fname) <= 80
+                                    else raw_fname[:77] + "..."
+                                )
                                 url = ""
                                 try:
                                     chat_id_r = rr.get("chat_id")
                                     message_id = rr.get("message_id")
                                     if chat_id_r and message_id:
                                         s = str(chat_id_r)
-                                        base = s[4:] if s.startswith("-100") else s.lstrip("-")
+                                        base = (
+                                            s[4:]
+                                            if s.startswith("-100")
+                                            else s.lstrip("-")
+                                        )
                                         url = f"https://t.me/c/{base}/{message_id}"
                                 except Exception:
                                     url = ""
                                 if url:
-                                    top_links.append({"text": f"{ii}) {display_raw}", "url": url})
+                                    top_links.append(
+                                        {"text": f"{ii}) {display_raw}", "url": url}
+                                    )
                         except Exception:
                             top_links = []
 
                         # persist top_links into the first saved page doc for callback rendering
                         try:
                             store_for_links = _ensure_internal_page_store()
-                            logger.info("api_search: set_top_links store={} pages={} top_links={}", "present" if store_for_links else "absent", len(pages), len(top_links))
+                            logger.info(
+                                "api_search: set_top_links store={} pages={} top_links={}",
+                                "present" if store_for_links else "absent",
+                                len(pages),
+                                len(top_links),
+                            )
                             if store_for_links:
                                 try:
-                                    await store_for_links.set_top_links(pages[0], top_links)
-                                    logger.info("api_search: set_top_links succeeded for page {}", pages[0])
+                                    await store_for_links.set_top_links(
+                                        pages[0], top_links
+                                    )
+                                    logger.info(
+                                        "api_search: set_top_links succeeded for page {}",
+                                        pages[0],
+                                    )
                                 except Exception:
-                                    logger.exception("api_search: set_top_links failed for page {}", pages[0])
+                                    logger.exception(
+                                        "api_search: set_top_links failed for page {}",
+                                        pages[0],
+                                    )
                         except Exception:
-                            logger.exception("api_search: error checking store_for_links")
+                            logger.exception(
+                                "api_search: error checking store_for_links"
+                            )
 
                         # fetch the first page and send it as a single message with
                         # nav + top-links + part buttons. If rendering or sending
@@ -1914,7 +2487,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                     gp = first.get("group_pages") or [first]
                                     md_all_lines = []
                                     for part in gp:
-                                        md_all_lines.extend((part.get("content") or "").splitlines())
+                                        md_all_lines.extend(
+                                            (part.get("content") or "").splitlines()
+                                        )
 
                                     # build top-links keyboard
                                     tlinks = first.get("top_links") or []
@@ -1922,7 +2497,10 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                                     row = []
                                     for tl in tlinks:
                                         try:
-                                            btn = {"text": (tl.get("text") or "")[:60], "url": tl.get("url")}
+                                            btn = {
+                                                "text": (tl.get("text") or "")[:60],
+                                                "url": tl.get("url"),
+                                            }
                                             row.append(btn)
                                             if len(row) >= 2:
                                                 kb_rows.append(row)
@@ -1934,32 +2512,69 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
 
                                     # (button removed) do not append 'Open formatted results' button
 
-                                    reply_markup = {"inline_keyboard": kb_rows} if kb_rows else None
-                                    await _send_markdown_full(token, chat_id, header, md_all_lines, reply_markup=reply_markup)
+                                    reply_markup = (
+                                        {"inline_keyboard": kb_rows}
+                                        if kb_rows
+                                        else None
+                                    )
+                                    await _send_markdown_full(
+                                        token,
+                                        chat_id,
+                                        header,
+                                        md_all_lines,
+                                        reply_markup=reply_markup,
+                                    )
                                     return
                                 except Exception:
-                                    logger.exception("api_search: failed to render/send saved full pages")
+                                    logger.exception(
+                                        "api_search: failed to render/send saved full pages"
+                                    )
                                     # Best-effort compact fallback so users can open the saved page
                                     try:
-                                        fallback_kb = {"inline_keyboard": [[{"text": "View full list", "callback_data": f"IP|{pages[0]}"}]]}
-                                        await _send_tg(token, chat_id, "Full results available — tap to open.", parse_mode=None, reply_markup=fallback_kb)
+                                        fallback_kb = {
+                                            "inline_keyboard": [
+                                                [
+                                                    {
+                                                        "text": "View full list",
+                                                        "callback_data": f"IP|{pages[0]}",
+                                                    }
+                                                ]
+                                            ]
+                                        }
+                                        await _send_tg(
+                                            token,
+                                            chat_id,
+                                            "Full results available — tap to open.",
+                                            parse_mode=None,
+                                            reply_markup=fallback_kb,
+                                        )
                                         return
                                     except Exception:
-                                        logger.exception("api_search: fallback button send failed")
+                                        logger.exception(
+                                            "api_search: fallback button send failed"
+                                        )
                         except Exception:
-                            logger.exception("api_search: failed to load first saved page")
+                            logger.exception(
+                                "api_search: failed to load first saved page"
+                            )
                     except Exception:
-                        logger.exception("api_search: failed while handling saved pages block")
+                        logger.exception(
+                            "api_search: failed while handling saved pages block"
+                        )
 
                 reply_markup = {"inline_keyboard": rows} if rows else None
 
                 # Send the full Markdown list as chunked HTML messages so links
                 # are preserved and Telegram entity parsing is less error-prone.
                 try:
-                    await _send_markdown_full(token, chat_id, header, md_lines, reply_markup=reply_markup)
+                    await _send_markdown_full(
+                        token, chat_id, header, md_lines, reply_markup=reply_markup
+                    )
                     return
                 except Exception:
-                    logger.exception("api_search: _send_markdown_full failed; falling back to multi-part Markdown send")
+                    logger.exception(
+                        "api_search: _send_markdown_full failed; falling back to multi-part Markdown send"
+                    )
 
                 # Fallback: chunk by lines to avoid splitting anchor tags.
                 parts = []
@@ -1981,7 +2596,13 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 for idx, part in enumerate(parts, start=1):
                     try:
                         if idx == 1:
-                            await _send_tg(token, chat_id, part, parse_mode="Markdown", reply_markup=reply_markup)
+                            await _send_tg(
+                                token,
+                                chat_id,
+                                part,
+                                parse_mode="Markdown",
+                                reply_markup=reply_markup,
+                            )
                         else:
                             await _send_tg(token, chat_id, part, parse_mode="Markdown")
                     except Exception:
@@ -1998,7 +2619,11 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         # Prefer using the internal page GUI when a store is available.
         try:
             store = _ensure_internal_page_store()
-            logger.info("api_search: telegraph/internal-page branch check; internal_page_store={} reply_len={}", "present" if store else "absent", len(reply_text))
+            logger.info(
+                "api_search: telegraph/internal-page branch check; internal_page_store={} reply_len={}",
+                "present" if store else "absent",
+                len(reply_text),
+            )
             toks = tokenize_query(query)
             if store:
                 # split reply_text into chunks (by lines) and save multiple pages
@@ -2016,10 +2641,25 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                 total_results = len(lines)
                 for part_index, chunk in enumerate(chunks):
                     try:
-                        logger.debug("api_search: saving reply_text page part {}/{} query={} preview={}", part_index + 1, total_parts, query, (chunk[:200] if chunk else None))
+                        logger.debug(
+                            "api_search: saving reply_text page part {}/{} query={} preview={}",
+                            part_index + 1,
+                            total_parts,
+                            query,
+                            (chunk[:200] if chunk else None),
+                        )
                     except Exception:
                         pass
-                    saved = await store.save_raw_page(query, chunk, toks, created_by=None, group=group, part_index=part_index, total_parts=total_parts, total_results=total_results)
+                    saved = await store.save_raw_page(
+                        query,
+                        chunk,
+                        toks,
+                        created_by=None,
+                        group=group,
+                        part_index=part_index,
+                        total_parts=total_parts,
+                        total_results=total_results,
+                    )
                     pages.append(saved.get("page_id"))
 
                 # After saving all parts, attempt to stream the full result set back
@@ -2031,7 +2671,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                             gp = first.get("group_pages") or [first]
                             md_all_lines = []
                             for part in gp:
-                                md_all_lines.extend((part.get("content") or "").splitlines())
+                                md_all_lines.extend(
+                                    (part.get("content") or "").splitlines()
+                                )
 
                             # Build top-links keyboard (two-per-row)
                             tlinks = first.get("top_links") or []
@@ -2039,7 +2681,10 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                             row = []
                             for tl in tlinks:
                                 try:
-                                    btn = {"text": (tl.get("text") or "")[:60], "url": tl.get("url")}
+                                    btn = {
+                                        "text": (tl.get("text") or "")[:60],
+                                        "url": tl.get("url"),
+                                    }
                                     row.append(btn)
                                     if len(row) >= 2:
                                         kb_rows.append(row)
@@ -2051,25 +2696,47 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
 
                             # (button removed) do not append 'Open formatted results' button
 
-                            reply_markup = {"inline_keyboard": kb_rows} if kb_rows else None
+                            reply_markup = (
+                                {"inline_keyboard": kb_rows} if kb_rows else None
+                            )
                             # Send each saved part as its own Markdown chunked message
                             try:
                                 total_parts_gp = len(gp)
                                 for pi, part in enumerate(gp, start=1):
-                                    part_lines = (part.get("content") or "").splitlines()
-                                    part_header = f"{header} — " + t("part_suffix", part=pi, parts=total_parts_gp)
+                                    part_lines = (
+                                        part.get("content") or ""
+                                    ).splitlines()
+                                    part_header = f"{header} — " + t(
+                                        "part_suffix", part=pi, parts=total_parts_gp
+                                    )
                                     rm = reply_markup if pi == 1 else None
                                     try:
-                                        logger.debug("saved-page send pi={} of {} reply_markup_present={} reply_markup_preview={}", pi, total_parts_gp, bool(rm), json.dumps(rm)[:400] if rm else None)
+                                        logger.debug(
+                                            "saved-page send pi={} of {} reply_markup_present={} reply_markup_preview={}",
+                                            pi,
+                                            total_parts_gp,
+                                            bool(rm),
+                                            json.dumps(rm)[:400] if rm else None,
+                                        )
                                     except Exception:
                                         # best-effort preview, do not fail the send
                                         pass
-                                    await _send_markdown_full(token, chat_id, part_header, part_lines, reply_markup=rm)
+                                    await _send_markdown_full(
+                                        token,
+                                        chat_id,
+                                        part_header,
+                                        part_lines,
+                                        reply_markup=rm,
+                                    )
                                 return
                             except Exception:
-                                logger.exception("api_search: failed while streaming saved parts per-page")
+                                logger.exception(
+                                    "api_search: failed while streaming saved parts per-page"
+                                )
                     except Exception:
-                        logger.exception("api_search: failed to render/send saved full pages after saving all parts")
+                        logger.exception(
+                            "api_search: failed to render/send saved full pages after saving all parts"
+                        )
         except Exception:
             # If page creation fails, continue to multi-message split
             logger.exception("failed to create internal pages")
@@ -2095,7 +2762,17 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         total_parts = len(parts)
         # Send each part with a small header containing metadata
         for idx, part in enumerate(parts, start=1):
-            header = "*" + t("results_part", query=_escape_markdown(query), part=idx, parts=total_parts, text=query) + "*"
+            header = (
+                "*"
+                + t(
+                    "results_part",
+                    query=_escape_markdown(query),
+                    part=idx,
+                    parts=total_parts,
+                    text=query,
+                )
+                + "*"
+            )
             meta_txt = f"results:{total} query_len:{len(query)} ts:{datetime.utcnow().isoformat()}Z"
             meta = f"\n_{_escape_markdown(meta_txt)}_\n\n"
             text_to_send = header + meta + part
@@ -2113,36 +2790,75 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
 
                 rm = reply_markup if idx == 1 else None
                 try:
-                    logger.debug("chunked send idx={} of {} reply_markup_present={} reply_markup_preview={}", idx, total_parts, bool(rm), json.dumps(rm)[:400] if rm else None)
+                    logger.debug(
+                        "chunked send idx={} of {} reply_markup_present={} reply_markup_preview={}",
+                        idx,
+                        total_parts,
+                        bool(rm),
+                        json.dumps(rm)[:400] if rm else None,
+                    )
                 except Exception:
                     pass
-                await _send_tg(token, chat_id, html_text, parse_mode="HTML", reply_markup=rm)
+                await _send_tg(
+                    token, chat_id, html_text, parse_mode="HTML", reply_markup=rm
+                )
             except Exception:
                 # If sending fails for any chunk, attempt to send a truncated summary
-                trunc = (part[:MAX_MSG - 100] + "\n\n[truncated]") if len(part) > (MAX_MSG - 100) else part
+                trunc = (
+                    (part[: MAX_MSG - 100] + "\n\n[truncated]")
+                    if len(part) > (MAX_MSG - 100)
+                    else part
+                )
                 try:
                     try:
                         try:
                             from app.utils.helpers import md_to_html
+
                             try:
-                                trunc_html = md_to_html(f"{header}\n\n{trunc}", one_per_line=True)
+                                trunc_html = md_to_html(
+                                    f"{header}\n\n{trunc}", one_per_line=True
+                                )
                             except Exception:
                                 trunc_html = html.escape(f"{header}\n\n{trunc}")
                         except Exception:
                             trunc_html = html.escape(f"{header}\n\n{trunc}")
                         rm = reply_markup if idx == 1 else None
                         try:
-                            logger.debug("chunked fallback HTML send idx={} of {} reply_markup_present={} reply_markup_preview={}", idx, total_parts, bool(rm), json.dumps(rm)[:400] if rm else None)
+                            logger.debug(
+                                "chunked fallback HTML send idx={} of {} reply_markup_present={} reply_markup_preview={}",
+                                idx,
+                                total_parts,
+                                bool(rm),
+                                json.dumps(rm)[:400] if rm else None,
+                            )
                         except Exception:
                             pass
-                        await _send_tg(token, chat_id, trunc_html, parse_mode="HTML", reply_markup=rm)
+                        await _send_tg(
+                            token,
+                            chat_id,
+                            trunc_html,
+                            parse_mode="HTML",
+                            reply_markup=rm,
+                        )
                     except Exception:
                         rm = reply_markup if idx == 1 else None
                         try:
-                            logger.debug("chunked fallback MD send idx={} of {} reply_markup_present={} reply_markup_preview={}", idx, total_parts, bool(rm), json.dumps(rm)[:400] if rm else None)
+                            logger.debug(
+                                "chunked fallback MD send idx={} of {} reply_markup_present={} reply_markup_preview={}",
+                                idx,
+                                total_parts,
+                                bool(rm),
+                                json.dumps(rm)[:400] if rm else None,
+                            )
                         except Exception:
                             pass
-                        await _send_tg(token, chat_id, f"{header}\n\n{trunc}", parse_mode="Markdown", reply_markup=rm)
+                        await _send_tg(
+                            token,
+                            chat_id,
+                            f"{header}\n\n{trunc}",
+                            parse_mode="Markdown",
+                            reply_markup=rm,
+                        )
                 except Exception:
                     # give up silently to avoid blocking the worker
                     return
@@ -2154,10 +2870,20 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
             truncated = _escape_markdown(reply_text[:MAX_MSG]) + "\n\n[truncated]"
             try:
                 try:
-                    logger.debug("fallback single send reply_markup_present={} reply_markup_preview={}", bool(reply_markup), json.dumps(reply_markup)[:400] if reply_markup else None)
+                    logger.debug(
+                        "fallback single send reply_markup_present={} reply_markup_preview={}",
+                        bool(reply_markup),
+                        json.dumps(reply_markup)[:400] if reply_markup else None,
+                    )
                 except Exception:
                     pass
-                await _send_tg(token, chat_id, truncated, parse_mode="Markdown", reply_markup=reply_markup if reply_markup is not None else None)
+                await _send_tg(
+                    token,
+                    chat_id,
+                    truncated,
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup if reply_markup is not None else None,
+                )
             except Exception:
                 await _send_tg(token, chat_id, truncated, parse_mode="Markdown")
         except Exception:
@@ -2165,7 +2891,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         return
 
     try:
-        logger.info("_process_search_and_send: attempting simple send (len={})", len(reply_text))
+        logger.info(
+            "_process_search_and_send: attempting simple send (len={})", len(reply_text)
+        )
     except Exception:
         pass
 
@@ -2174,12 +2902,22 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(tg_url, json=payload, timeout=10)
-            logger.info("Telegram sendMessage response: status={}, body={}", resp.status_code, resp.text[:400])
+            logger.info(
+                "Telegram sendMessage response: status={}, body={}",
+                resp.status_code,
+                resp.text[:400],
+            )
         except Exception as exc:
             logger.exception("Failed to POST to Telegram API (background): {}", exc)
 
 
-async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None = None, reply_markup: object | None = None) -> None:
+async def _send_tg(
+    token: str,
+    chat_id: int,
+    text: str,
+    parse_mode: str | None = None,
+    reply_markup: object | None = None,
+) -> None:
     """Utility to send a message via Telegram Bot API."""
     if chat_id is None:
         logger.warning("_send_tg called with no chat_id")
@@ -2243,19 +2981,33 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
                 # Log full outgoing payload (best-effort). Masking of secrets is
                 # handled by the logger sink configured in `app.utils.logger`.
                 try:
-                    logger.info("Telegram sendMessage (attempt {}) request payload: {}", attempt, json.dumps(payload, ensure_ascii=False))
+                    logger.info(
+                        "Telegram sendMessage (attempt {}) request payload: {}",
+                        attempt,
+                        json.dumps(payload, ensure_ascii=False),
+                    )
                 except Exception:
                     try:
-                        logger.info("Telegram sendMessage (attempt {}) request payload (repr): {}", attempt, repr(payload)[:10000])
+                        logger.info(
+                            "Telegram sendMessage (attempt {}) request payload (repr): {}",
+                            attempt,
+                            repr(payload)[:10000],
+                        )
                     except Exception:
                         pass
 
                 resp = await client.post(tg_url, json=payload, timeout=10)
                 # Log the full response body for diagnosis
                 try:
-                    logger.info("Telegram sendMessage response: status={} body={}", resp.status_code, (resp.text or ""))
+                    logger.info(
+                        "Telegram sendMessage response: status={} body={}",
+                        resp.status_code,
+                        (resp.text or ""),
+                    )
                 except Exception:
-                    logger.info("Telegram sendMessage response: status={}", resp.status_code)
+                    logger.info(
+                        "Telegram sendMessage response: status={}", resp.status_code
+                    )
 
                 # Success
                 if resp.status_code == 200:
@@ -2270,19 +3022,37 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
 
                 # If Telegram reports a parsing error for entities, retry once
                 # without parse_mode so the message is delivered as plain text.
-                if payload.get("parse_mode") and resp.status_code == 400 and (
-                    "can't parse entities" in body_text.lower() or "parse entities" in body_text.lower()
+                if (
+                    payload.get("parse_mode")
+                    and resp.status_code == 400
+                    and (
+                        "can't parse entities" in body_text.lower()
+                        or "parse entities" in body_text.lower()
+                    )
                 ):
                     try:
                         # Log detailed debug info about the parse error and payload
                         try:
-                            logger.warning("Telegram parse error (400) for parse_mode={}; body={}", payload.get("parse_mode"), (body_text or ""))
+                            logger.warning(
+                                "Telegram parse error (400) for parse_mode={}; body={}",
+                                payload.get("parse_mode"),
+                                (body_text or ""),
+                            )
                             try:
-                                logger.warning("Offending payload: {}", json.dumps(payload, ensure_ascii=False))
+                                logger.warning(
+                                    "Offending payload: {}",
+                                    json.dumps(payload, ensure_ascii=False),
+                                )
                             except Exception:
-                                logger.warning("Offending payload (repr): {}", repr(payload)[:10000])
+                                logger.warning(
+                                    "Offending payload (repr): {}",
+                                    repr(payload)[:10000],
+                                )
                         except Exception:
-                            logger.warning("Telegram parse error (400) for parse_mode={}", payload.get("parse_mode"))
+                            logger.warning(
+                                "Telegram parse error (400) for parse_mode={}",
+                                payload.get("parse_mode"),
+                            )
                         # Try an alternative: convert HTML anchors to MarkdownV2
                         # and retry sending with `parse_mode=MarkdownV2` before
                         # falling back to plain text. This often succeeds when
@@ -2293,23 +3063,43 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
 
                                 raw_text = payload.get("text", "") or ""
                                 try:
-                                    anchors_to_md = re.sub(r'<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>', r'[\2](\1)', raw_text, flags=re.I)
+                                    anchors_to_md = re.sub(
+                                        r'<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>',
+                                        r"[\2](\1)",
+                                        raw_text,
+                                        flags=re.I,
+                                    )
                                     anchors_to_md = html.unescape(anchors_to_md)
                                 except Exception:
                                     anchors_to_md = html.unescape(raw_text)
 
                                 try:
                                     mdv2_text = md_to_markdownv2(anchors_to_md)
-                                    alt_payload = {"chat_id": payload.get("chat_id"), "text": mdv2_text, "parse_mode": "MarkdownV2"}
+                                    alt_payload = {
+                                        "chat_id": payload.get("chat_id"),
+                                        "text": mdv2_text,
+                                        "parse_mode": "MarkdownV2",
+                                    }
                                     if "reply_markup" in payload:
-                                        alt_payload["reply_markup"] = payload.get("reply_markup")
+                                        alt_payload["reply_markup"] = payload.get(
+                                            "reply_markup"
+                                        )
                                     try:
-                                        logger.info("Telegram parse error: retrying with MarkdownV2 alternative payload preview: {}", (mdv2_text or "")[:320])
+                                        logger.info(
+                                            "Telegram parse error: retrying with MarkdownV2 alternative payload preview: {}",
+                                            (mdv2_text or "")[:320],
+                                        )
                                     except Exception:
                                         pass
-                                    resp3 = await client.post(tg_url, json=alt_payload, timeout=10)
+                                    resp3 = await client.post(
+                                        tg_url, json=alt_payload, timeout=10
+                                    )
                                     try:
-                                        logger.debug("Telegram MarkdownV2 retry response: status={} body={}", resp3.status_code, (resp3.text or "")[:2000])
+                                        logger.debug(
+                                            "Telegram MarkdownV2 retry response: status={} body={}",
+                                            resp3.status_code,
+                                            (resp3.text or "")[:2000],
+                                        )
                                     except Exception:
                                         pass
                                     if resp3.status_code == 200:
@@ -2337,22 +3127,36 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
                             except Exception:
                                 pass
                         except Exception:
-                            plain = unescape_for_plain_text(payload.get("text", "") or "")
+                            plain = unescape_for_plain_text(
+                                payload.get("text", "") or ""
+                            )
 
                         fallback = {"chat_id": payload.get("chat_id"), "text": plain}
                         if "reply_markup" in payload:
                             fallback["reply_markup"] = payload.get("reply_markup")
 
                         try:
-                            logger.debug("Telegram fallback send payload: {}", json.dumps(fallback, ensure_ascii=False)[:2000])
+                            logger.debug(
+                                "Telegram fallback send payload: {}",
+                                json.dumps(fallback, ensure_ascii=False)[:2000],
+                            )
                         except Exception:
-                            logger.debug("Telegram fallback send payload (unserializable)")
+                            logger.debug(
+                                "Telegram fallback send payload (unserializable)"
+                            )
 
                         resp2 = await client.post(tg_url, json=fallback, timeout=10)
                         try:
-                            logger.info("Telegram fallback send (plain text) response: status={} body={}", resp2.status_code, (resp2.text or ""))
+                            logger.info(
+                                "Telegram fallback send (plain text) response: status={} body={}",
+                                resp2.status_code,
+                                (resp2.text or ""),
+                            )
                         except Exception:
-                            logger.info("Telegram fallback send response: status={}", resp2.status_code)
+                            logger.info(
+                                "Telegram fallback send response: status={}",
+                                resp2.status_code,
+                            )
                         if resp2.status_code == 200:
                             # After successfully delivering the plain-text fallback,
                             # try to save a formatted copy into the internal/telegraph
@@ -2369,13 +3173,23 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
                                         # e.g. <a href="url">Label</a> -> [Label](url)
                                         raw_html = payload.get("text", "") or ""
                                         try:
-                                            anchors_to_md = re.sub(r'<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>', r'[\2](\1)', raw_html, flags=re.I)
+                                            anchors_to_md = re.sub(
+                                                r'<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>',
+                                                r"[\2](\1)",
+                                                raw_html,
+                                                flags=re.I,
+                                            )
                                             # Unescape HTML entities to restore readable text
                                             anchors_to_md = html.unescape(anchors_to_md)
                                         except Exception:
                                             anchors_to_md = html.unescape(raw_html)
 
-                                        saved = await store.save_raw_page("__fallback__", anchors_to_md, tokens=[], created_by=None)
+                                        saved = await store.save_raw_page(
+                                            "__fallback__",
+                                            anchors_to_md,
+                                            tokens=[],
+                                            created_by=None,
+                                        )
                                         pid = saved.get("page_id")
                                         if pid:
                                             try:
@@ -2385,38 +3199,65 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
                                                     or os.getenv("API_BASE_URL")
                                                     or os.getenv("APP_URL")
                                                     or os.getenv("RENDER_EXTERNAL_URL")
-                                                    or f"http://localhost:{os.getenv('PORT','8000')}"
+                                                    or f"http://localhost:{os.getenv('PORT', '8000')}"
                                                 )
-                                                if api_base and not api_base.lower().startswith(("http://", "https://")):
+                                                if (
+                                                    api_base
+                                                    and not api_base.lower().startswith(
+                                                        ("http://", "https://")
+                                                    )
+                                                ):
                                                     api_base = f"https://{api_base}"
                                                 try:
                                                     from urllib.parse import urlparse
 
                                                     parsed = urlparse(api_base)
-                                                    if parsed.scheme == "http" and parsed.hostname and parsed.hostname not in ("localhost", "127.0.0.1"):
-                                                        api_base = api_base.replace("http://", "https://", 1)
+                                                    if (
+                                                        parsed.scheme == "http"
+                                                        and parsed.hostname
+                                                        and parsed.hostname
+                                                        not in (
+                                                            "localhost",
+                                                            "127.0.0.1",
+                                                        )
+                                                    ):
+                                                        api_base = api_base.replace(
+                                                            "http://", "https://", 1
+                                                        )
                                                 except Exception:
                                                     pass
 
-                                                public_url = api_base.rstrip("/") + f"/p/{pid}"
+                                                public_url = (
+                                                    api_base.rstrip("/") + f"/p/{pid}"
+                                                )
 
                                                 # Avoid duplicating a public link when the original
                                                 # payload already included a keyboard with a URL button
                                                 # or already contained an explicit 'View formatted results' text.
                                                 def _payload_has_url_button(pl):
                                                     try:
-                                                        rm = pl.get("reply_markup") or {}
+                                                        rm = (
+                                                            pl.get("reply_markup") or {}
+                                                        )
                                                         kb = rm.get("inline_keyboard")
                                                         if not kb:
                                                             return False
                                                         for row in kb:
                                                             for btn in row:
                                                                 try:
-                                                                    if isinstance(btn, dict):
-                                                                        if btn.get("url"):
+                                                                    if isinstance(
+                                                                        btn, dict
+                                                                    ):
+                                                                        if btn.get(
+                                                                            "url"
+                                                                        ):
                                                                             return True
                                                                     else:
-                                                                        if hasattr(btn, "url") and getattr(btn, "url"):
+                                                                        if hasattr(
+                                                                            btn, "url"
+                                                                        ) and getattr(
+                                                                            btn, "url"
+                                                                        ):
                                                                             return True
                                                                 except Exception:
                                                                     continue
@@ -2426,23 +3267,48 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
 
                                                 text_already = False
                                                 try:
-                                                    text_already = "view formatted results" in (payload.get("text") or "").lower()
+                                                    text_already = (
+                                                        "view formatted results"
+                                                        in (
+                                                            payload.get("text") or ""
+                                                        ).lower()
+                                                    )
                                                 except Exception:
                                                     text_already = False
 
-                                                if not _payload_has_url_button(payload) and not text_already:
+                                                if (
+                                                    not _payload_has_url_button(payload)
+                                                    and not text_already
+                                                ):
                                                     try:
                                                         tele_msg = f"View formatted results: {public_url}"
-                                                        tele_payload = {"chat_id": payload.get("chat_id"), "text": tele_msg}
-                                                        await client.post(tg_url, json=tele_payload, timeout=10)
+                                                        tele_payload = {
+                                                            "chat_id": payload.get(
+                                                                "chat_id"
+                                                            ),
+                                                            "text": tele_msg,
+                                                        }
+                                                        await client.post(
+                                                            tg_url,
+                                                            json=tele_payload,
+                                                            timeout=10,
+                                                        )
                                                     except Exception:
-                                                        logger.exception("_send_tg: failed to send public page link after fallback")
+                                                        logger.exception(
+                                                            "_send_tg: failed to send public page link after fallback"
+                                                        )
                                             except Exception:
-                                                logger.exception("_send_tg: failed to construct public page link")
+                                                logger.exception(
+                                                    "_send_tg: failed to construct public page link"
+                                                )
                                     except Exception:
-                                        logger.exception("_send_tg: failed to save telegraph fallback page")
+                                        logger.exception(
+                                            "_send_tg: failed to save telegraph fallback page"
+                                        )
                             except Exception:
-                                logger.exception("_send_tg: unexpected error while creating telegraph fallback")
+                                logger.exception(
+                                    "_send_tg: unexpected error while creating telegraph fallback"
+                                )
                             return
                     except Exception:
                         logger.exception("Telegram fallback send failed")
@@ -2451,9 +3317,18 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
                 # this was the last attempt.
                 if attempt == retries:
                     try:
-                        logger.error("Telegram sendMessage failed after {} attempts: status={} body={}", attempt, resp.status_code, (resp.text or ""))
+                        logger.error(
+                            "Telegram sendMessage failed after {} attempts: status={} body={}",
+                            attempt,
+                            resp.status_code,
+                            (resp.text or ""),
+                        )
                     except Exception:
-                        logger.error("Telegram sendMessage failed after {} attempts: status={}", attempt, resp.status_code)
+                        logger.error(
+                            "Telegram sendMessage failed after {} attempts: status={}",
+                            attempt,
+                            resp.status_code,
+                        )
                     return
                 else:
                     await asyncio.sleep(backoff * attempt)
@@ -2461,12 +3336,16 @@ async def _send_tg(token: str, chat_id: int, text: str, parse_mode: str | None =
             except Exception as exc:
                 logger.warning("Telegram send attempt {} failed: {}", attempt, exc)
                 if attempt == retries:
-                    logger.exception("Failed to POST to Telegram API after retries: {}", exc)
+                    logger.exception(
+                        "Failed to POST to Telegram API after retries: {}", exc
+                    )
                 else:
                     await asyncio.sleep(backoff * attempt)
 
 
-async def _answer_callback(token: str, callback_id: str, text: str | None = None, show_alert: bool = False) -> None:
+async def _answer_callback(
+    token: str, callback_id: str, text: str | None = None, show_alert: bool = False
+) -> None:
     """Utility to answer a callback_query to remove the loading state."""
     if not callback_id:
         return
@@ -2483,7 +3362,13 @@ async def _answer_callback(token: str, callback_id: str, text: str | None = None
         logger.exception("_answer_callback failed")
 
 
-async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or_text, reply_markup: object | None = None) -> None:
+async def _send_markdown_full(
+    token: str,
+    chat_id: int,
+    header: str,
+    md_lines_or_text,
+    reply_markup: object | None = None,
+) -> None:
     """Send a large Markdown list by splitting into message-sized chunks.
 
     - `md_lines_or_text` may be a list of lines or a single string.
@@ -2541,11 +3426,17 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
         if store:
             try:
                 try:
-                    full_md = (header + "\n\n" + "\n".join(lines)) if header else "\n".join(lines)
+                    full_md = (
+                        (header + "\n\n" + "\n".join(lines))
+                        if header
+                        else "\n".join(lines)
+                    )
                 except Exception:
                     full_md = "\n".join(lines)
                 # Save full content; auto-splitting handled by the store
-                saved = await store.save_raw_page("__forced__", full_md, tokens=[], created_by=None)
+                saved = await store.save_raw_page(
+                    "__forced__", full_md, tokens=[], created_by=None
+                )
                 pid = saved.get("page_id") if isinstance(saved, dict) else None
                 if pid:
                     try:
@@ -2556,10 +3447,12 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                             or os.getenv("API_BASE_URL")
                             or os.getenv("APP_URL")
                             or os.getenv("RENDER_EXTERNAL_URL")
-                            or f"http://localhost:{os.getenv('PORT','8000')}"
+                            or f"http://localhost:{os.getenv('PORT', '8000')}"
                         )
                         # Ensure a scheme is present
-                        if api_base and not api_base.lower().startswith(("http://", "https://")):
+                        if api_base and not api_base.lower().startswith(
+                            ("http://", "https://")
+                        ):
                             api_base = f"https://{api_base}"
 
                         # Promote http->https for public hosts (avoid changing localhost)
@@ -2567,7 +3460,11 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                             from urllib.parse import urlparse
 
                             parsed = urlparse(api_base)
-                            if parsed.scheme == "http" and parsed.hostname and parsed.hostname not in ("localhost", "127.0.0.1"):
+                            if (
+                                parsed.scheme == "http"
+                                and parsed.hostname
+                                and parsed.hostname not in ("localhost", "127.0.0.1")
+                            ):
                                 api_base = api_base.replace("http://", "https://", 1)
                         except Exception:
                             pass
@@ -2582,9 +3479,15 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                             if str(public_url).lower().startswith("https://"):
                                 btn = {"text": t("open_results"), "url": public_url}
                             else:
-                                btn = {"text": t("open_results"), "callback_data": f"IP|{pid}"}
+                                btn = {
+                                    "text": t("open_results"),
+                                    "callback_data": f"IP|{pid}",
+                                }
                         except Exception:
-                            btn = {"text": t("open_results"), "callback_data": f"IP|{pid}"}
+                            btn = {
+                                "text": t("open_results"),
+                                "callback_data": f"IP|{pid}",
+                            }
 
                         try:
                             orig_rm = reply_markup
@@ -2605,19 +3508,33 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                                 else:
                                     try:
                                         if hasattr(orig_rm, "inline_keyboard"):
-                                            norm = {"inline_keyboard": getattr(orig_rm, "inline_keyboard")}
+                                            norm = {
+                                                "inline_keyboard": getattr(
+                                                    orig_rm, "inline_keyboard"
+                                                )
+                                            }
                                         elif hasattr(orig_rm, "rows"):
-                                            norm = {"inline_keyboard": getattr(orig_rm, "rows")}
+                                            norm = {
+                                                "inline_keyboard": getattr(
+                                                    orig_rm, "rows"
+                                                )
+                                            }
                                         elif hasattr(orig_rm, "to_dict"):
                                             d = orig_rm.to_dict()
                                             if "inline_keyboard" in d:
                                                 norm = d
                                             elif "rows" in d:
-                                                norm = {"inline_keyboard": d.get("rows")}
+                                                norm = {
+                                                    "inline_keyboard": d.get("rows")
+                                                }
                                     except Exception:
                                         norm = None
 
-                                if norm and isinstance(norm, dict) and norm.get("inline_keyboard"):
+                                if (
+                                    norm
+                                    and isinstance(norm, dict)
+                                    and norm.get("inline_keyboard")
+                                ):
                                     try:
                                         kb = list(norm.get("inline_keyboard"))
                                     except Exception:
@@ -2629,14 +3546,28 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                                             for b in row:
                                                 try:
                                                     if isinstance(b, dict):
-                                                        if btn.get("url") and b.get("url") == btn.get("url"):
+                                                        if btn.get("url") and b.get(
+                                                            "url"
+                                                        ) == btn.get("url"):
                                                             exists = True
-                                                        if btn.get("callback_data") and b.get("callback_data") == btn.get("callback_data"):
+                                                        if btn.get(
+                                                            "callback_data"
+                                                        ) and b.get(
+                                                            "callback_data"
+                                                        ) == btn.get("callback_data"):
                                                             exists = True
                                                     else:
-                                                        if hasattr(b, "url") and getattr(b, "url") == btn.get("url"):
+                                                        if hasattr(
+                                                            b, "url"
+                                                        ) and getattr(
+                                                            b, "url"
+                                                        ) == btn.get("url"):
                                                             exists = True
-                                                        if hasattr(b, "callback_data") and getattr(b, "callback_data") == btn.get("callback_data"):
+                                                        if hasattr(
+                                                            b, "callback_data"
+                                                        ) and getattr(
+                                                            b, "callback_data"
+                                                        ) == btn.get("callback_data"):
                                                             exists = True
                                                 except Exception:
                                                     continue
@@ -2656,7 +3587,9 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                         # send a clickable plaintext fallback replacing Markdown
                         # links with `Label — URL` and removing backslash escapes
                         try:
-                            from app.utils.helpers import chunk_lines_by_char_limit as _chunker
+                            from app.utils.helpers import (
+                                chunk_lines_by_char_limit as _chunker,
+                            )
                         except Exception:
                             _chunker = None
 
@@ -2667,7 +3600,10 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                             # Markdown backslash-escapes so plaintext is readable.
                             # (unescape the whole line so non-link lines also
                             # lose their Telegram-Markdown backslash escapes)
-                            clickable_lines = [unescape_for_plain_text(md_links_to_clickable(ln)) for ln in full_md.splitlines()]
+                            clickable_lines = [
+                                unescape_for_plain_text(md_links_to_clickable(ln))
+                                for ln in full_md.splitlines()
+                            ]
                         except Exception:
                             clickable_lines = full_md.splitlines()
 
@@ -2675,7 +3611,9 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                             # Chunk these lines to avoid overly large messages
                             if _chunker:
                                 try:
-                                    clickable_chunks = _chunker(clickable_lines, CHUNK_CHAR_LIMIT)
+                                    clickable_chunks = _chunker(
+                                        clickable_lines, CHUNK_CHAR_LIMIT
+                                    )
                                 except Exception:
                                     clickable_chunks = ["\n".join(clickable_lines)]
                             else:
@@ -2707,9 +3645,14 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                                     # label->URL pattern present. Avoid using a
                                     # bare em-dash as a signal because headers
                                     # themselves contain an em-dash (e.g. "Search: ... — part 1/3").
-                                    if not (re.search(r'https?://', first_chunk) or re.search(r'—\s*https?://', first_chunk)):
+                                    if not (
+                                        re.search(r"https?://", first_chunk)
+                                        or re.search(r"—\s*https?://", first_chunk)
+                                    ):
                                         # merge first two chunks
-                                        clickable_chunks[0] = first_chunk + "\n\n" + clickable_chunks[1]
+                                        clickable_chunks[0] = (
+                                            first_chunk + "\n\n" + clickable_chunks[1]
+                                        )
                                         del clickable_chunks[1]
                             except Exception:
                                 pass
@@ -2725,8 +3668,11 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                                     rm = reply_markup if ci == 0 else None
                                     try:
                                         import re as _re2
+
                                         try:
-                                            from app.utils.helpers import md_to_markdownv2
+                                            from app.utils.helpers import (
+                                                md_to_markdownv2,
+                                            )
                                         except Exception:
                                             md_to_markdownv2 = None
 
@@ -2734,36 +3680,69 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
                                         # markdown link form `[Label](URL)` before escaping
                                         # for MarkdownV2. Support hyphen, en-dash and em-dash.
                                         try:
-                                            md_pattern = _re2.compile(r'(.+?)\s+[—–-]\s+(https?://\S+)', flags=_re2.U)
-                                            anchors_md = md_pattern.sub(r'[\1](\2)', ctext)
+                                            md_pattern = _re2.compile(
+                                                r"(.+?)\s+[—–-]\s+(https?://\S+)",
+                                                flags=_re2.U,
+                                            )
+                                            anchors_md = md_pattern.sub(
+                                                r"[\1](\2)", ctext
+                                            )
                                         except Exception:
                                             anchors_md = ctext
 
                                         if md_to_markdownv2:
                                             try:
                                                 mdv2_text = md_to_markdownv2(anchors_md)
-                                                await _send_tg(token, chat_id, mdv2_text, parse_mode="MarkdownV2", reply_markup=rm)
+                                                await _send_tg(
+                                                    token,
+                                                    chat_id,
+                                                    mdv2_text,
+                                                    parse_mode="MarkdownV2",
+                                                    reply_markup=rm,
+                                                )
                                                 continue
                                             except Exception:
                                                 # fall through to plain-text send
                                                 pass
 
                                         # Fallback: send as plain text
-                                        await _send_tg(token, chat_id, ctext, parse_mode=None, reply_markup=rm)
+                                        await _send_tg(
+                                            token,
+                                            chat_id,
+                                            ctext,
+                                            parse_mode=None,
+                                            reply_markup=rm,
+                                        )
                                     except Exception:
                                         # Last-resort: send plain text
-                                        await _send_tg(token, chat_id, ctext, parse_mode=None, reply_markup=rm)
+                                        await _send_tg(
+                                            token,
+                                            chat_id,
+                                            ctext,
+                                            parse_mode=None,
+                                            reply_markup=rm,
+                                        )
                                 except Exception:
-                                    logger.exception("_send_markdown_full: failed to send clickable plaintext chunk {}/{}", ci + 1, len(clickable_chunks))
+                                    logger.exception(
+                                        "_send_markdown_full: failed to send clickable plaintext chunk {}/{}",
+                                        ci + 1,
+                                        len(clickable_chunks),
+                                    )
                         except Exception:
-                            logger.exception("_send_markdown_full: failed to build/send clickable plaintext fallback")
+                            logger.exception(
+                                "_send_markdown_full: failed to build/send clickable plaintext fallback"
+                            )
 
                         # (intentional) do not send an explicit textual public URL here
                     except Exception:
-                        logger.exception("_send_markdown_full: failed to send public page link")
+                        logger.exception(
+                            "_send_markdown_full: failed to send public page link"
+                        )
                     return
             except Exception:
-                logger.exception("_send_markdown_full: failed to save forced public page")
+                logger.exception(
+                    "_send_markdown_full: failed to save forced public page"
+                )
     except Exception:
         # Don't allow forced-public failures to stop normal chunk sending
         logger.exception("_send_markdown_full: unexpected error in forced-public block")
@@ -2776,6 +3755,7 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
         try:
             from app.utils.helpers import unescape_for_plain_text
         except Exception:
+
             def unescape_for_plain_text(x):
                 return x
 
@@ -2799,16 +3779,30 @@ async def _send_markdown_full(token: str, chat_id: int, header: str, md_lines_or
             # in normal server logs (not just DEBUG). This helps determine
             # whether HTML anchors are actually being generated/sent.
             try:
-                logger.info("_send_markdown_full: sending chunk {}/{} len={} preview={}", idx + 1, len(chunks), len(text_html or ""), (text_html or "")[:320])
+                logger.info(
+                    "_send_markdown_full: sending chunk {}/{} len={} preview={}",
+                    idx + 1,
+                    len(chunks),
+                    len(text_html or ""),
+                    (text_html or "")[:320],
+                )
             except Exception:
                 pass
 
             if idx == 0:
-                await _send_tg(token, chat_id, text_html, parse_mode="HTML", reply_markup=reply_markup)
+                await _send_tg(
+                    token,
+                    chat_id,
+                    text_html,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup,
+                )
             else:
                 await _send_tg(token, chat_id, text_html, parse_mode="HTML")
         except Exception:
-            logger.exception("_send_markdown_full: failed to send chunk {}/{}", idx + 1, len(chunks))
+            logger.exception(
+                "_send_markdown_full: failed to send chunk {}/{}", idx + 1, len(chunks)
+            )
             # continue to next chunk
     return
 
@@ -2850,14 +3844,18 @@ def _redact_webhook_path(url: str) -> str:
     segments = [s for s in urllib.parse.urlsplit(url or "").path.split("/") if s]
     if not segments:
         return "/"
-    return "/" + "/".join("***" if (":" in s or any(ch.isdigit() for ch in s)) else s for s in segments)
+    return "/" + "/".join(
+        "***" if (":" in s or any(ch.isdigit() for ch in s)) else s for s in segments
+    )
 
 
 async def _telegram_webhook_info(token: str) -> dict:
     """Telegram's own view of the bot: where it delivers and what last failed."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"https://api.telegram.org/bot{token}/getWebhookInfo")
+            resp = await client.get(
+                f"https://api.telegram.org/bot{token}/getWebhookInfo"
+            )
         data = resp.json()
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
@@ -2915,13 +3913,19 @@ async def status(request: Request):
     """
     expected = os.getenv("STATUS_TOKEN")
     if not expected:
-        return JSONResponse(status_code=404, content={"ok": False, "error": "status disabled"})
-    provided = request.headers.get("X-STATUS-TOKEN") or request.query_params.get("token")
+        return JSONResponse(
+            status_code=404, content={"ok": False, "error": "status disabled"}
+        )
+    provided = request.headers.get("X-STATUS-TOKEN") or request.query_params.get(
+        "token"
+    )
     if provided != expected:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "unauthorized"})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "error": "unauthorized"}
+        )
 
     webhooks = []
-    for cred in (settings.API_CREDENTIALS or []):
+    for cred in settings.API_CREDENTIALS or []:
         bot_token = cred.get("bot_token")
         if not bot_token:
             continue
@@ -2949,11 +3953,15 @@ async def diag_mongo_tls(request: Request, host: str | None = None):
     """
     diag_secret = getattr(settings, "DIAG_SECRET", None)
     if not diag_secret:
-        return JSONResponse(status_code=404, content={"ok": False, "error": "diagnostics disabled"})
+        return JSONResponse(
+            status_code=404, content={"ok": False, "error": "diagnostics disabled"}
+        )
 
     token = request.headers.get("X-DIAG-TOKEN") or request.query_params.get("token")
     if not token or token != diag_secret:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "unauthorized"})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "error": "unauthorized"}
+        )
 
     uri = settings.MONGO_URI or ""
     # derive a reasonable host to probe from the URI
@@ -2967,7 +3975,7 @@ async def diag_mongo_tls(request: Request, host: str | None = None):
         m = re.match(r"mongodb://(?:[^@]+@)?([^/]+)", uri or "", re.I)
         if m:
             hosts_part = m.group(1)
-            host_candidate = hosts_part.split(",")[0].split(":" )[0]
+            host_candidate = hosts_part.split(",")[0].split(":")[0]
 
     target = host or host_candidate or "localhost"
 
@@ -2999,25 +4007,34 @@ async def diag_mongo_tls(request: Request, host: str | None = None):
 
 
 @app.get("/_diag/internal_page_store")
-async def diag_internal_page_store(request: Request, create: bool | None = Query(False), token: str | None = None):
+async def diag_internal_page_store(
+    request: Request, create: bool | None = Query(False), token: str | None = None
+):
     """Diagnostic: report internal page store status and optionally create a test page.
 
     Protected by `DIAG_SECRET` (use `X-DIAG-TOKEN` header or `token` query param).
     """
     diag_secret = getattr(settings, "DIAG_SECRET", None)
     if not diag_secret:
-        return JSONResponse(status_code=404, content={"ok": False, "error": "diagnostics disabled"})
+        return JSONResponse(
+            status_code=404, content={"ok": False, "error": "diagnostics disabled"}
+        )
 
     header_token = request.headers.get("X-DIAG-TOKEN")
     provided = header_token or token
     if not provided or provided != diag_secret:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "unauthorized"})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "error": "unauthorized"}
+        )
 
     # Ensure a store exists (creates in-memory fallback if needed)
     store = _ensure_internal_page_store()
     info = {"ok": True, "store_present": bool(store)}
     try:
-        from app.services.internal_pages import InternalPageStore, InMemoryInternalPageStore
+        from app.services.internal_pages import (
+            InternalPageStore,
+            InMemoryInternalPageStore,
+        )
 
         if isinstance(store, InMemoryInternalPageStore):
             info["store_type"] = "InMemoryInternalPageStore"
@@ -3040,7 +4057,15 @@ async def diag_internal_page_store(request: Request, create: bool | None = Query
     if create and store:
         try:
             toks = []
-            saved = await store.save_raw_page("_diag_test_", "Test page content", toks, created_by=None, group=None, part_index=0, total_parts=1)
+            saved = await store.save_raw_page(
+                "_diag_test_",
+                "Test page content",
+                toks,
+                created_by=None,
+                group=None,
+                part_index=0,
+                total_parts=1,
+            )
             info["created_test_page"] = saved.get("page_id")
         except Exception:
             info["created_test_page_error"] = True
@@ -3094,7 +4119,11 @@ async def public_page(request: Request, page_id: str):
 
     # Ensure anchor tags open in a new tab/window
     try:
-        html_body = re.sub(r'<a\s+href="', '<a target="_blank" rel="noopener noreferrer" href="', html_body)
+        html_body = re.sub(
+            r'<a\s+href="',
+            '<a target="_blank" rel="noopener noreferrer" href="',
+            html_body,
+        )
     except Exception:
         pass
 
@@ -3123,7 +4152,10 @@ async def public_page(request: Request, page_id: str):
 
             try:
                 # If at least one per-line ref looks usable, render anchors from them
-                has_refs = any((r and r.get("chat_id") and r.get("message_id")) for r in md_line_refs)
+                has_refs = any(
+                    (r and r.get("chat_id") and r.get("message_id"))
+                    for r in md_line_refs
+                )
             except Exception:
                 has_refs = False
 
@@ -3147,14 +4179,18 @@ async def public_page(request: Request, page_id: str):
                                 mt = ref.get("match_type")
                                 if mt and mt not in ("unknown", None):
                                     mt_esc = html.escape(str(mt))
-                                    new_html_lines.append(f'<a target="_blank" rel="noopener noreferrer" href="{url}">{label_esc}</a> <span style="color:#666;font-size:0.9em">({mt_esc})</span>')
+                                    new_html_lines.append(
+                                        f'<a target="_blank" rel="noopener noreferrer" href="{url}">{label_esc}</a> <span style="color:#666;font-size:0.9em">({mt_esc})</span>'
+                                    )
                                 else:
-                                    new_html_lines.append(f'<a target="_blank" rel="noopener noreferrer" href="{url}">{label_esc}</a>')
+                                    new_html_lines.append(
+                                        f'<a target="_blank" rel="noopener noreferrer" href="{url}">{label_esc}</a>'
+                                    )
                             else:
                                 new_html_lines.append(label_esc)
                         except Exception:
                             new_html_lines.append(html.escape(ln))
-                    html_body = '<br/>\n'.join(new_html_lines)
+                    html_body = "<br/>\n".join(new_html_lines)
                 except Exception:
                     # fallback to DB-based enrichment below
                     md_line_refs = []
@@ -3172,18 +4208,24 @@ async def public_page(request: Request, page_id: str):
                     # - Use greedy matching so we capture the final extension on the line.
                     # - Allow and ignore common trailing punctuation (])}).,;:"')
                     # - Use Unicode flag for broad character support.
-                    pattern = re.compile(r'(.+\.(?:' + video_exts + r'))(?:[\)\]\}\.,;:\"\']*)\s*$', re.I | re.U)
+                    pattern = re.compile(
+                        r"(.+\.(?:" + video_exts + r"))(?:[\)\]\}\.,;:\"\']*)\s*$",
+                        re.I | re.U,
+                    )
                     try:
                         from app.utils.helpers import unescape_for_plain_text
                     except Exception:
+
                         def unescape_for_plain_text(x):
                             return x or ""
+
                     import urllib.parse
 
                     enriched_lines = []
                     # Limit resolution attempts to avoid excessive DB load
                     MAX_RESOLVE = 500
                     resolved = 0
+
                     async def _find_best_file_doc(filename: str):
                         """Find the best-matching file doc for `filename`.
 
@@ -3204,7 +4246,12 @@ async def public_page(request: Request, page_id: str):
                         Tie-breaker: newest `timestamp` then highest `message_id`.
                         """
                         try:
-                            proj = {"chat_id": 1, "message_id": 1, "timestamp": 1, "filename": 1}
+                            proj = {
+                                "chat_id": 1,
+                                "message_id": 1,
+                                "timestamp": 1,
+                                "filename": 1,
+                            }
                             sort_order = [("timestamp", -1), ("message_id", -1)]
                             from app.utils.helpers import normalize_filename_key
 
@@ -3219,9 +4266,12 @@ async def public_page(request: Request, page_id: str):
 
                             def _add_candidates(res_list):
                                 try:
-                                    for c in (res_list or []):
+                                    for c in res_list or []:
                                         # avoid duplicates by chat_id/message_id
-                                        key = (int(c.get("chat_id") or 0), int(c.get("message_id") or 0))
+                                        key = (
+                                            int(c.get("chat_id") or 0),
+                                            int(c.get("message_id") or 0),
+                                        )
                                         if key not in seen_keys:
                                             seen_keys.add(key)
                                             candidates.append(c)
@@ -3233,7 +4283,13 @@ async def public_page(request: Request, page_id: str):
                             # Fast path: lookup by normalized filename key (eager-indexed)
                             if fname_norm_input:
                                 try:
-                                    res = await coll.find({"norm_filename": fname_norm_input}, proj).sort(sort_order).to_list(length=5)
+                                    res = (
+                                        await coll.find(
+                                            {"norm_filename": fname_norm_input}, proj
+                                        )
+                                        .sort(sort_order)
+                                        .to_list(length=5)
+                                    )
                                     if res:
                                         # prefer newest match
                                         return res[0]
@@ -3242,12 +4298,26 @@ async def public_page(request: Request, page_id: str):
 
                             # 1) exact (case-insensitive)
                             try:
-                                q = {"filename": {"$regex": f'^{re.escape(filename)}$', "$options": "i"}}
-                                res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
+                                q = {
+                                    "filename": {
+                                        "$regex": f"^{re.escape(filename)}$",
+                                        "$options": "i",
+                                    }
+                                }
+                                res = (
+                                    await coll.find(q, proj)
+                                    .sort(sort_order)
+                                    .to_list(length=10)
+                                )
                                 # if any exact normalized match, return immediately
                                 for cand in res:
                                     try:
-                                        if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                        if (
+                                            normalize_filename_key(
+                                                cand.get("filename") or ""
+                                            )
+                                            == fname_norm_input
+                                        ):
                                             return cand
                                     except Exception:
                                         pass
@@ -3262,11 +4332,25 @@ async def public_page(request: Request, page_id: str):
                                 filename_unq = filename
                             if filename_unq and filename_unq != filename:
                                 try:
-                                    q = {"filename": {"$regex": f'^{re.escape(filename_unq)}$', "$options": "i"}}
-                                    res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
+                                    q = {
+                                        "filename": {
+                                            "$regex": f"^{re.escape(filename_unq)}$",
+                                            "$options": "i",
+                                        }
+                                    }
+                                    res = (
+                                        await coll.find(q, proj)
+                                        .sort(sort_order)
+                                        .to_list(length=10)
+                                    )
                                     for cand in res:
                                         try:
-                                            if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                            if (
+                                                normalize_filename_key(
+                                                    cand.get("filename") or ""
+                                                )
+                                                == fname_norm_input
+                                            ):
                                                 return cand
                                         except Exception:
                                             pass
@@ -3277,11 +4361,25 @@ async def public_page(request: Request, page_id: str):
                             # 3) suffix match (prefer most recent)
                             try:
                                 short = filename[-60:]
-                                q = {"filename": {"$regex": re.escape(short) + r'$', "$options": "i"}}
-                                res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
+                                q = {
+                                    "filename": {
+                                        "$regex": re.escape(short) + r"$",
+                                        "$options": "i",
+                                    }
+                                }
+                                res = (
+                                    await coll.find(q, proj)
+                                    .sort(sort_order)
+                                    .to_list(length=10)
+                                )
                                 for cand in res:
                                     try:
-                                        if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                        if (
+                                            normalize_filename_key(
+                                                cand.get("filename") or ""
+                                            )
+                                            == fname_norm_input
+                                        ):
                                             return cand
                                     except Exception:
                                         pass
@@ -3295,12 +4393,29 @@ async def public_page(request: Request, page_id: str):
                                 tokens_norm = [t for t in norm.split() if t]
                                 if tokens_norm:
                                     tokens_use = tokens_norm[:6]
-                                    fuzzy_pattern = ".*".join([re.escape(t) for t in tokens_use]) + r'.*$'
-                                    q = {"filename": {"$regex": fuzzy_pattern, "$options": "i"}}
-                                    res = await coll.find(q, proj).sort(sort_order).to_list(length=50)
+                                    fuzzy_pattern = (
+                                        ".*".join([re.escape(t) for t in tokens_use])
+                                        + r".*$"
+                                    )
+                                    q = {
+                                        "filename": {
+                                            "$regex": fuzzy_pattern,
+                                            "$options": "i",
+                                        }
+                                    }
+                                    res = (
+                                        await coll.find(q, proj)
+                                        .sort(sort_order)
+                                        .to_list(length=50)
+                                    )
                                     for cand in res:
                                         try:
-                                            if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                            if (
+                                                normalize_filename_key(
+                                                    cand.get("filename") or ""
+                                                )
+                                                == fname_norm_input
+                                            ):
                                                 return cand
                                         except Exception:
                                             pass
@@ -3310,14 +4425,32 @@ async def public_page(request: Request, page_id: str):
 
                             # 5) try by longer token fragments
                             try:
-                                long_tokens = [t for t in normalize_text(filename).split() if len(t) >= 4]
+                                long_tokens = [
+                                    t
+                                    for t in normalize_text(filename).split()
+                                    if len(t) >= 4
+                                ]
                                 for tok in long_tokens[:3]:
                                     try:
-                                        q = {"filename": {"$regex": re.escape(tok), "$options": "i"}}
-                                        res = await coll.find(q, proj).sort(sort_order).to_list(length=10)
+                                        q = {
+                                            "filename": {
+                                                "$regex": re.escape(tok),
+                                                "$options": "i",
+                                            }
+                                        }
+                                        res = (
+                                            await coll.find(q, proj)
+                                            .sort(sort_order)
+                                            .to_list(length=10)
+                                        )
                                         for cand in res:
                                             try:
-                                                if normalize_filename_key(cand.get("filename") or "") == fname_norm_input:
+                                                if (
+                                                    normalize_filename_key(
+                                                        cand.get("filename") or ""
+                                                    )
+                                                    == fname_norm_input
+                                                ):
                                                     return cand
                                             except Exception:
                                                 pass
@@ -3333,10 +4466,25 @@ async def public_page(request: Request, page_id: str):
 
                             # If filename seems like a video, prefer the most recent candidate
                             try:
-                                file_ext = (filename.rsplit('.', 1)[1] or "").lower() if '.' in filename else ""
+                                file_ext = (
+                                    (filename.rsplit(".", 1)[1] or "").lower()
+                                    if "." in filename
+                                    else ""
+                                )
                             except Exception:
                                 file_ext = ""
-                            video_exts_set = {"mp4", "mkv", "webm", "mov", "avi", "flv", "m4v", "ts", "mpeg", "mpg"}
+                            video_exts_set = {
+                                "mp4",
+                                "mkv",
+                                "webm",
+                                "mov",
+                                "avi",
+                                "flv",
+                                "m4v",
+                                "ts",
+                                "mpeg",
+                                "mpg",
+                            }
                             if file_ext in video_exts_set and candidates:
                                 # prefer newest candidate (already sorted by timestamp desc)
                                 return candidates[0]
@@ -3347,35 +4495,56 @@ async def public_page(request: Request, page_id: str):
                             try:
                                 # precompute input trigrams/tokens
                                 try:
-                                    fname_tris = make_trigrams((filename or "")[:200], TRIGRAM_MAX)
+                                    fname_tris = make_trigrams(
+                                        (filename or "")[:200], TRIGRAM_MAX
+                                    )
                                 except Exception:
                                     fname_tris = []
-                                in_tokens = set(t for t in fname_norm_input.split() if t)
+                                in_tokens = set(
+                                    t for t in fname_norm_input.split() if t
+                                )
                                 for cand in candidates:
                                     try:
                                         score = 0.0
-                                        cand_fname = (cand.get("filename") or "")
+                                        cand_fname = cand.get("filename") or ""
                                         cand_norm = normalize_filename_key(cand_fname)
                                         # normalized equality
-                                        if cand_norm and fname_norm_input and cand_norm == fname_norm_input:
+                                        if (
+                                            cand_norm
+                                            and fname_norm_input
+                                            and cand_norm == fname_norm_input
+                                        ):
                                             score += 3.0
                                         # suffix match
                                         try:
-                                            if cand_fname and filename and cand_fname.lower().endswith(filename.lower()):
+                                            if (
+                                                cand_fname
+                                                and filename
+                                                and cand_fname.lower().endswith(
+                                                    filename.lower()
+                                                )
+                                            ):
                                                 score += 1.5
                                         except Exception:
                                             pass
                                         # token overlap
                                         try:
-                                            cand_tokens = set(t for t in cand_norm.split() if t)
+                                            cand_tokens = set(
+                                                t for t in cand_norm.split() if t
+                                            )
                                             if in_tokens and cand_tokens:
-                                                overlap = len(in_tokens & cand_tokens) / float(len(in_tokens | cand_tokens))
+                                                overlap = len(
+                                                    in_tokens & cand_tokens
+                                                ) / float(len(in_tokens | cand_tokens))
                                                 score += overlap * 1.5
                                         except Exception:
                                             pass
                                         # trigram similarity
                                         try:
-                                            tri_sim = trigram_similarity(fname_tris, cand.get("trigrams", []) or [])
+                                            tri_sim = trigram_similarity(
+                                                fname_tris,
+                                                cand.get("trigrams", []) or [],
+                                            )
                                             score += tri_sim * 1.5
                                         except Exception:
                                             pass
@@ -3391,9 +4560,13 @@ async def public_page(request: Request, page_id: str):
                                             elif isinstance(ts, datetime):
                                                 ts_dt = ts
                                             if ts_dt:
-                                                age_seconds = (datetime.utcnow() - ts_dt).total_seconds()
+                                                age_seconds = (
+                                                    datetime.utcnow() - ts_dt
+                                                ).total_seconds()
                                                 window = 30 * 24 * 3600
-                                                recency = max(0.0, (window - age_seconds) / window)
+                                                recency = max(
+                                                    0.0, (window - age_seconds) / window
+                                                )
                                                 score += recency * 0.5
                                         except Exception:
                                             pass
@@ -3424,7 +4597,9 @@ async def public_page(request: Request, page_id: str):
                                 continue
                             ln_un = unescape_for_plain_text(ln or "")
                             # Remove common list prefixes like '1) ', '1. ', '- ', '* ', '• '
-                            ln_clean = re.sub(r'^\s*(?:\d+[\)\.]\s*|[-\*\u2022]\s*)', '', ln_un)
+                            ln_clean = re.sub(
+                                r"^\s*(?:\d+[\)\.]\s*|[-\*\u2022]\s*)", "", ln_un
+                            )
                             m = pattern.search(ln_clean)
                             if m:
                                 filename = m.group(1).strip()
@@ -3464,7 +4639,12 @@ async def public_page(request: Request, page_id: str):
     page_query = html.escape(raw_query)
     page_lang = resolve_lang(text=raw_query)
     title = (
-        t("results_header", query=page_query, total=page.get("total_results") or 0, lang=page_lang)
+        t(
+            "results_header",
+            query=page_query,
+            total=page.get("total_results") or 0,
+            lang=page_lang,
+        )
         if page_query
         else t("results_title", page_lang)
     )
@@ -3478,11 +4658,13 @@ async def public_page(request: Request, page_id: str):
             try:
                 text = html.escape((tl.get("text") or "")[:80])
                 url = html.escape(tl.get("url") or "")
-                parts.append(f'<a href="{url}" target="_blank" rel="noopener noreferrer">{text}</a>')
+                parts.append(
+                    f'<a href="{url}" target="_blank" rel="noopener noreferrer">{text}</a>'
+                )
             except Exception:
                 continue
         if parts:
-            top_html = "<div class=\"top-links\">" + " | ".join(parts) + "</div><hr/>"
+            top_html = '<div class="top-links">' + " | ".join(parts) + "</div><hr/>"
 
     page_dir = "rtl" if page_lang == "ar" else "ltr"
     html_page = f"""<!doctype html>
@@ -3514,22 +4696,38 @@ async def admin_get_page(request: Request, page_id: str, token: str | None = Non
     """
     diag_secret = getattr(settings, "DIAG_SECRET", None)
     if not diag_secret:
-        return JSONResponse(status_code=404, content={"ok": False, "error": "admin endpoints disabled"})
+        return JSONResponse(
+            status_code=404, content={"ok": False, "error": "admin endpoints disabled"}
+        )
 
     header_token = request.headers.get("X-DIAG-TOKEN")
     provided = header_token or token
     if not provided or provided != diag_secret:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "unauthorized"})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "error": "unauthorized"}
+        )
 
     db = getattr(app.state, "db", None)
     if db is None:
-        return JSONResponse(status_code=503, content={"ok": False, "error": "DB unavailable"})
+        return JSONResponse(
+            status_code=503, content={"ok": False, "error": "DB unavailable"}
+        )
 
     try:
-        coll = db.get_collection(getattr(settings, "TELEGRAPH_DB", "course_bot")).get_collection("telegraph_pages") if False else db.client[getattr(settings, "TELEGRAPH_DB", "course_bot")].get_collection("telegraph_pages")
+        coll = (
+            db.get_collection(
+                getattr(settings, "TELEGRAPH_DB", "course_bot")
+            ).get_collection("telegraph_pages")
+            if False
+            else db.client[
+                getattr(settings, "TELEGRAPH_DB", "course_bot")
+            ].get_collection("telegraph_pages")
+        )
         doc = await coll.find_one({"_id": __import__("bson").ObjectId(page_id)})
         if not doc:
-            return JSONResponse(status_code=404, content={"ok": False, "error": "not found"})
+            return JSONResponse(
+                status_code=404, content={"ok": False, "error": "not found"}
+            )
         # normalize datetime
         try:
             if isinstance(doc.get("created_at"), __import__("datetime").datetime):
@@ -3558,12 +4756,16 @@ async def admin_cache_invalidate(request: Request, token: str | None = None):
     """
     diag_secret = getattr(settings, "DIAG_SECRET", None)
     if not diag_secret:
-        return JSONResponse(status_code=404, content={"ok": False, "error": "admin endpoints disabled"})
+        return JSONResponse(
+            status_code=404, content={"ok": False, "error": "admin endpoints disabled"}
+        )
 
     header_token = request.headers.get("X-DIAG-TOKEN")
     provided = header_token or token
     if not provided or provided != diag_secret:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "unauthorized"})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "error": "unauthorized"}
+        )
 
     try:
         body = await request.json()
@@ -3572,7 +4774,9 @@ async def admin_cache_invalidate(request: Request, token: str | None = None):
 
     cache = getattr(app.state, "search_cache", None)
     if cache is None:
-        return JSONResponse(status_code=503, content={"ok": False, "error": "cache unavailable"})
+        return JSONResponse(
+            status_code=503, content={"ok": False, "error": "cache unavailable"}
+        )
 
     try:
         if body.get("all"):
@@ -3583,8 +4787,13 @@ async def admin_cache_invalidate(request: Request, token: str | None = None):
             return JSONResponse(status_code=200, content={"ok": True, "deleted": True})
         if body.get("query"):
             await cache.invalidate_by_query(body.get("query"))
-            return JSONResponse(status_code=200, content={"ok": True, "invalidated_query": body.get("query")})
-        return JSONResponse(status_code=400, content={"ok": False, "error": "missing parameters"})
+            return JSONResponse(
+                status_code=200,
+                content={"ok": True, "invalidated_query": body.get("query")},
+            )
+        return JSONResponse(
+            status_code=400, content={"ok": False, "error": "missing parameters"}
+        )
     except Exception as exc:
         logger.exception("cache invalidate failed: {}", exc)
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
@@ -3594,15 +4803,21 @@ async def admin_cache_invalidate(request: Request, token: str | None = None):
 async def admin_cache_stats(request: Request, token: str | None = None):
     diag_secret = getattr(settings, "DIAG_SECRET", None)
     if not diag_secret:
-        return JSONResponse(status_code=404, content={"ok": False, "error": "admin endpoints disabled"})
+        return JSONResponse(
+            status_code=404, content={"ok": False, "error": "admin endpoints disabled"}
+        )
     header_token = request.headers.get("X-DIAG-TOKEN")
     provided = header_token or token
     if not provided or provided != diag_secret:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "unauthorized"})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "error": "unauthorized"}
+        )
 
     cache = getattr(app.state, "search_cache", None)
     if cache is None:
-        return JSONResponse(status_code=503, content={"ok": False, "error": "cache unavailable"})
+        return JSONResponse(
+            status_code=503, content={"ok": False, "error": "cache unavailable"}
+        )
 
     try:
         stats = await cache.stats()
@@ -3632,7 +4847,9 @@ async def api_search(
     cache_key = None
     if cache:
         try:
-            cache_key = cache.make_key(q, page, per_page, strict, thread_id, allow_broad)
+            cache_key = cache.make_key(
+                q, page, per_page, strict, thread_id, allow_broad
+            )
             cached = await cache.get(cache_key)
             if cached and isinstance(cached, dict):
                 return cached
@@ -3641,7 +4858,9 @@ async def api_search(
 
     db = getattr(app.state, "db", None)
     if db is None:
-        logger.warning("api_search: MongoDB unavailable, returning empty results for query={}", q)
+        logger.warning(
+            "api_search: MongoDB unavailable, returning empty results for query={}", q
+        )
         return {"results": [], "total": 0}
 
     try:
@@ -3690,7 +4909,11 @@ async def api_search(
             return True
         return False
 
-    use_atlas = os.getenv("ENABLE_ATLAS_SEARCH", "").lower() in ("1", "true", "yes") or _uri_uses_tls_local(getattr(settings, "MONGO_URI", ""))
+    use_atlas = os.getenv("ENABLE_ATLAS_SEARCH", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ) or _uri_uses_tls_local(getattr(settings, "MONGO_URI", ""))
 
     docs = []
     total = 0
@@ -3698,6 +4921,7 @@ async def api_search(
     if use_atlas:
         # Build Atlas $search aggregation pipeline using field boosts from env
         try:
+
             def _get_w(name, default):
                 try:
                     return float(os.getenv(name, str(default)))
@@ -3712,7 +4936,11 @@ async def api_search(
             w_trigram = _get_w("RANK_TRIGRAM_WEIGHT", TRIGRAM_WEIGHT)
             w_fname = _get_w("RANK_FILENAME_MATCH", FILENAME_MATCH)
 
-            fuzzy_enabled = os.getenv("ATLAS_SEARCH_FUZZY", "true").lower() in ("1", "true", "yes")
+            fuzzy_enabled = os.getenv("ATLAS_SEARCH_FUZZY", "true").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
 
             # Precision-first compound: exact phrase + token text WITHOUT fuzzy,
             # plus a single low-boost fuzzy clause on the aggregated search_text
@@ -3720,20 +4948,54 @@ async def api_search(
             should = []
             # exact phrase on the full-title string (strongest) — phrase
             # cannot match across array elements, so it targets title_phrase
-            should.append({
-                "phrase": {"query": q, "path": "title_phrase", "score": {"boost": {"value": w_title * 3.0}}}
-            })
+            should.append(
+                {
+                    "phrase": {
+                        "query": q,
+                        "path": "title_phrase",
+                        "score": {"boost": {"value": w_title * 3.0}},
+                    }
+                }
+            )
             # title tokens (high precision, exact tokens only)
-            should.append({
-                "text": {"query": q, "path": "title_tokens", "score": {"boost": {"value": w_title}}}
-            })
+            should.append(
+                {
+                    "text": {
+                        "query": q,
+                        "path": "title_tokens",
+                        "score": {"boost": {"value": w_title}},
+                    }
+                }
+            )
             # filename exact / substring
-            should.append({
-                "text": {"query": q, "path": "filename", "score": {"boost": {"value": w_fname}}}
-            })
+            should.append(
+                {
+                    "text": {
+                        "query": q,
+                        "path": "filename",
+                        "score": {"boost": {"value": w_fname}},
+                    }
+                }
+            )
             # quality and codec
-            should.append({"text": {"query": q, "path": "quality_tokens", "score": {"boost": {"value": w_quality}}}})
-            should.append({"text": {"query": q, "path": "codec_tokens", "score": {"boost": {"value": w_codec}}}})
+            should.append(
+                {
+                    "text": {
+                        "query": q,
+                        "path": "quality_tokens",
+                        "score": {"boost": {"value": w_quality}},
+                    }
+                }
+            )
+            should.append(
+                {
+                    "text": {
+                        "query": q,
+                        "path": "codec_tokens",
+                        "score": {"boost": {"value": w_codec}},
+                    }
+                }
+            )
             # typo tier: fuzzy only on the aggregated search_text, low boost
             fuzzy_clause = {
                 "text": {
@@ -3751,9 +5013,16 @@ async def api_search(
             # important title tokens (tier filtering happens in Python below).
             min_should = 1
 
-            search_stage = {"$search": {"compound": {"should": should, "minimumShouldMatch": min_should}}}
+            search_stage = {
+                "$search": {
+                    "compound": {"should": should, "minimumShouldMatch": min_should}
+                }
+            }
 
-            pipeline = [search_stage, {"$addFields": {"score": {"$meta": "searchScore"}}}]
+            pipeline = [
+                search_stage,
+                {"$addFields": {"score": {"$meta": "searchScore"}}},
+            ]
 
             # apply filters (thread_id) after searchStage
             if thread_id is not None:
@@ -3791,7 +5060,9 @@ async def api_search(
             except Exception:
                 total = len(docs)
         except Exception:
-            logger.exception("api_search: atlas aggregation failed, falling back to legacy search")
+            logger.exception(
+                "api_search: atlas aggregation failed, falling back to legacy search"
+            )
             docs = []
 
     if not docs:
@@ -3801,11 +5072,15 @@ async def api_search(
             # helper to collect unique candidates preserving order
             candidates = []
             seen = set()
+
             def _add(res_list):
                 try:
-                    for c in (res_list or []):
+                    for c in res_list or []:
                         try:
-                            key = (int(c.get("chat_id") or 0), int(c.get("message_id") or 0))
+                            key = (
+                                int(c.get("chat_id") or 0),
+                                int(c.get("message_id") or 0),
+                            )
                         except Exception:
                             key = (0, 0)
                         if key not in seen:
@@ -3818,6 +5093,7 @@ async def api_search(
             # attempt eager normalized filename lookup first
             try:
                 from app.utils.helpers import normalize_filename_key
+
                 qnorm = normalize_filename_key(q or "")
             except Exception:
                 qnorm = ""
@@ -3830,7 +5106,11 @@ async def api_search(
                             qn["message_thread_id"] = int(thread_id)
                         except Exception:
                             pass
-                    res = await coll.find(qn, projection).sort(sort_order).to_list(length=50)
+                    res = (
+                        await coll.find(qn, projection)
+                        .sort(sort_order)
+                        .to_list(length=50)
+                    )
                     _add(res)
                 except Exception:
                     pass
@@ -3841,10 +5121,16 @@ async def api_search(
                     q_all = {"title_tokens": {"$all": tokens}}
                     if thread_id is not None:
                         try:
-                            q_all = {"$and": [q_all, {"message_thread_id": int(thread_id)}]}
+                            q_all = {
+                                "$and": [q_all, {"message_thread_id": int(thread_id)}]
+                            }
                         except Exception:
                             pass
-                    res_all = await coll.find(q_all, projection).sort(sort_order).to_list(length=500)
+                    res_all = (
+                        await coll.find(q_all, projection)
+                        .sort(sort_order)
+                        .to_list(length=500)
+                    )
                     _add(res_all)
             except Exception:
                 pass
@@ -3855,10 +5141,19 @@ async def api_search(
                         q_any = {"title_tokens": {"$in": tokens}}
                         if thread_id is not None:
                             try:
-                                q_any = {"$and": [q_any, {"message_thread_id": int(thread_id)}]}
+                                q_any = {
+                                    "$and": [
+                                        q_any,
+                                        {"message_thread_id": int(thread_id)},
+                                    ]
+                                }
                             except Exception:
                                 pass
-                        res_any = await coll.find(q_any, projection).sort(sort_order).to_list(length=2000)
+                        res_any = (
+                            await coll.find(q_any, projection)
+                            .sort(sort_order)
+                            .to_list(length=2000)
+                        )
                         _add(res_any)
                 except Exception:
                     pass
@@ -3870,13 +5165,22 @@ async def api_search(
                     if thread_id is not None:
                         try:
                             if q_tri:
-                                q_tri = {"$and": [q_tri, {"message_thread_id": int(thread_id)}]}
+                                q_tri = {
+                                    "$and": [
+                                        q_tri,
+                                        {"message_thread_id": int(thread_id)},
+                                    ]
+                                }
                             else:
                                 q_tri = {"message_thread_id": int(thread_id)}
                         except Exception:
                             pass
                     if q_tri:
-                        res_tri = await coll.find(q_tri, projection).sort(sort_order).to_list(length=5000)
+                        res_tri = (
+                            await coll.find(q_tri, projection)
+                            .sort(sort_order)
+                            .to_list(length=5000)
+                        )
                         _add(res_tri)
                 except Exception:
                     pass
@@ -3891,8 +5195,19 @@ async def api_search(
         try:
             or_clauses = []
             for t in tokens:
-                or_clauses.append({"title_tokens": {"$elemMatch": {"$regex": f"^{re.escape(t)}", "$options": "i"}}})
-                or_clauses.append({"filename": {"$regex": re.escape(t), "$options": "i"}})
+                or_clauses.append(
+                    {
+                        "title_tokens": {
+                            "$elemMatch": {
+                                "$regex": f"^{re.escape(t)}",
+                                "$options": "i",
+                            }
+                        }
+                    }
+                )
+                or_clauses.append(
+                    {"filename": {"$regex": re.escape(t), "$options": "i"}}
+                )
             docs = await coll.find({"$or": or_clauses}, projection).to_list(length=500)
         except Exception as exc:
             logger.exception("api_search: broad fallback DB query failed: {}", exc)
@@ -3917,9 +5232,18 @@ async def api_search(
             continue
     # strict mode never broadens below "all" (same as the bot handler path)
     min_tier = "all" if strict else resolve_min_tier(classified, start_tier=start_tier)
-    results = [d for d in classified if accepts_tier(d.get("_tier", NONE_TIER), min_tier)]
+    results = [
+        d for d in classified if accepts_tier(d.get("_tier", NONE_TIER), min_tier)
+    ]
 
-    results.sort(key=lambda r: (tier_priority(r.get("_tier")), r.get("_score", 0.0), r.get("timestamp")), reverse=True)
+    results.sort(
+        key=lambda r: (
+            tier_priority(r.get("_tier")),
+            r.get("_score", 0.0),
+            r.get("timestamp"),
+        ),
+        reverse=True,
+    )
     # If we computed `total` earlier (Atlas count), prefer it; otherwise derive from results
     total = total if isinstance(total, int) and total > 0 else len(results)
     # When using Atlas Search the pipeline already applied skip/limit; preserve results as-is.
@@ -3947,6 +5271,7 @@ async def api_search(
 
     # Support markdown output for easy export/pasting into chats
     if str(output_format).lower() in ("md", "markdown"):
+
         def is_video_doc(doc: dict) -> bool:
             """Return True for video-like documents (.mp4/.mov/.webm etc.)."""
             mime = (doc.get("mime") or doc.get("content_type") or "").lower()
@@ -3956,7 +5281,18 @@ async def api_search(
                 return True
             try:
                 # check common video extensions
-                for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi", ".flv", ".m4v", ".ts", ".mpeg", ".mpg"):
+                for ext in (
+                    ".mp4",
+                    ".mov",
+                    ".webm",
+                    ".mkv",
+                    ".avi",
+                    ".flv",
+                    ".m4v",
+                    ".ts",
+                    ".mpeg",
+                    ".mpg",
+                ):
                     if fname.endswith(ext):
                         return True
             except Exception:
@@ -4008,19 +5344,33 @@ async def api_search(
                         for r in mp4_results:
                             ref = {}
                             try:
-                                ref["chat_id"] = int(r.get("chat_id")) if r.get("chat_id") is not None else None
+                                ref["chat_id"] = (
+                                    int(r.get("chat_id"))
+                                    if r.get("chat_id") is not None
+                                    else None
+                                )
                             except Exception:
                                 ref["chat_id"] = None
                             try:
-                                ref["message_id"] = int(r.get("message_id")) if r.get("message_id") is not None else None
+                                ref["message_id"] = (
+                                    int(r.get("message_id"))
+                                    if r.get("message_id") is not None
+                                    else None
+                                )
                             except Exception:
                                 ref["message_id"] = None
                             try:
-                                ref["filename"] = r.get("filename") or r.get("file_name") or ""
+                                ref["filename"] = (
+                                    r.get("filename") or r.get("file_name") or ""
+                                )
                             except Exception:
                                 ref["filename"] = ""
                             try:
-                                ref["match_score"] = float(r.get("_score")) if r.get("_score") is not None else None
+                                ref["match_score"] = (
+                                    float(r.get("_score"))
+                                    if r.get("_score") is not None
+                                    else None
+                                )
                             except Exception:
                                 ref["match_score"] = None
                             ref["match_type"] = "export"
@@ -4028,19 +5378,40 @@ async def api_search(
                     except Exception:
                         md_line_refs = []
 
-                    chunks = chunk_lines_with_refs(lines, md_line_refs, CHUNK_CHAR_LIMIT)
+                    chunks = chunk_lines_with_refs(
+                        lines, md_line_refs, CHUNK_CHAR_LIMIT
+                    )
                     total_parts = len(chunks)
                     total_results = len(lines)
                     try:
-                        page_header = t("export_header", query=q, total=total_results, text=q)
+                        page_header = t(
+                            "export_header", query=q, total=total_results, text=q
+                        )
                     except Exception:
                         page_header = f"Export: {q}"
                     for part_index, (chunk, chunk_refs) in enumerate(chunks):
                         try:
-                            logger.debug("api_search(md): saving telegraph page part {}/{} query={} preview={}", part_index + 1, total_parts, q, (chunk[:200] if chunk else None))
+                            logger.debug(
+                                "api_search(md): saving telegraph page part {}/{} query={} preview={}",
+                                part_index + 1,
+                                total_parts,
+                                q,
+                                (chunk[:200] if chunk else None),
+                            )
                         except Exception:
                             pass
-                        saved = await store.save_raw_page(q, chunk, tokens, created_by=None, group=group, part_index=part_index, total_parts=total_parts, total_results=total_results, page_header=page_header, line_refs=chunk_refs)
+                        saved = await store.save_raw_page(
+                            q,
+                            chunk,
+                            tokens,
+                            created_by=None,
+                            group=group,
+                            part_index=part_index,
+                            total_parts=total_parts,
+                            total_results=total_results,
+                            page_header=page_header,
+                            line_refs=chunk_refs,
+                        )
                         pages.append(saved.get("page_id"))
                     # build a combined reference and prepend first page
                     if pages:
@@ -4050,16 +5421,25 @@ async def api_search(
                                 or os.getenv("API_BASE_URL")
                                 or os.getenv("APP_URL")
                                 or os.getenv("RENDER_EXTERNAL_URL")
-                                or f"http://localhost:{os.getenv('PORT','8000')}"
+                                or f"http://localhost:{os.getenv('PORT', '8000')}"
                             )
-                            if api_base and not api_base.lower().startswith(("http://", "https://")):
+                            if api_base and not api_base.lower().startswith(
+                                ("http://", "https://")
+                            ):
                                 api_base = f"https://{api_base}"
                             try:
                                 from urllib.parse import urlparse
 
                                 parsed = urlparse(api_base)
-                                if parsed.scheme == "http" and parsed.hostname and parsed.hostname not in ("localhost", "127.0.0.1"):
-                                    api_base = api_base.replace("http://", "https://", 1)
+                                if (
+                                    parsed.scheme == "http"
+                                    and parsed.hostname
+                                    and parsed.hostname
+                                    not in ("localhost", "127.0.0.1")
+                                ):
+                                    api_base = api_base.replace(
+                                        "http://", "https://", 1
+                                    )
                             except Exception:
                                 pass
 
@@ -4068,10 +5448,16 @@ async def api_search(
                             # appears to be a public HTTPS host; otherwise prefer a
                             # telegraph token so we don't expose localhost URLs.
                             if str(public_first).lower().startswith("https://"):
-                                md_text = f"View formatted results: {public_first} (parts: {len(pages)})\n\n" + md_text
+                                md_text = (
+                                    f"View formatted results: {public_first} (parts: {len(pages)})\n\n"
+                                    + md_text
+                                )
                             else:
                                 tele_url = f"telegraph://{pages[0]}"
-                                md_text = f"Telegraph: {tele_url} (parts: {len(pages)})\n\n" + md_text
+                                md_text = (
+                                    f"Telegraph: {tele_url} (parts: {len(pages)})\n\n"
+                                    + md_text
+                                )
 
                             # if multiple pages, add parts list to md_text but prefer
                             # public HTTPS links; otherwise list telegraph tokens.
@@ -4083,26 +5469,38 @@ async def api_search(
                                         if str(purl).lower().startswith("https://"):
                                             parts_lines.append(f"{idx}) {purl}")
                                         else:
-                                            parts_lines.append(f"{idx}) telegraph://{pid}")
+                                            parts_lines.append(
+                                                f"{idx}) telegraph://{pid}"
+                                            )
                                     except Exception:
                                         parts_lines.append(f"{idx}) telegraph://{pid}")
                                 md_text = "\n".join(parts_lines) + "\n\n" + md_text
                         except Exception:
                             # fallback to telegraph-like token if env not present
                             tele_url = f"telegraph://{pages[0]}"
-                            md_text = f"Telegraph: {tele_url} (parts: {len(pages)})\n\n" + md_text
+                            md_text = (
+                                f"Telegraph: {tele_url} (parts: {len(pages)})\n\n"
+                                + md_text
+                            )
                             if len(pages) > 1:
-                                parts_lines = [f"Parts:"] + [f"{idx}) telegraph://{pid}" for idx, pid in enumerate(pages, start=1)]
+                                parts_lines = [f"Parts:"] + [
+                                    f"{idx}) telegraph://{pid}"
+                                    for idx, pid in enumerate(pages, start=1)
+                                ]
                                 md_text = "\n".join(parts_lines) + "\n\n" + md_text
                     # optionally mark matched docs with telegraph page id
                     try:
-                        page_id = saved.get('page_id')
+                        page_id = saved.get("page_id")
                         if page_id:
                             # attach page reference to matched documents
                             async def _attach():
                                 try:
                                     await coll.update_many(
-                                        {"chat_id": {"$exists": True}, "message_id": {"$exists": True}, "_id": {"$exists": True}},
+                                        {
+                                            "chat_id": {"$exists": True},
+                                            "message_id": {"$exists": True},
+                                            "_id": {"$exists": True},
+                                        },
                                         {"$addToSet": {"telegraph_pages": page_id}},
                                     )
                                 except Exception:
@@ -4136,8 +5534,23 @@ async def api_search(
             except Exception:
                 file_ids = []
 
-            metadata = {"query": q, "page": page, "per_page": per_page, "strict": bool(strict), "file_ids": file_ids}
-            await cache.set(cache_key, {"results": page_results, "total": total, "page": page, "per_page": per_page}, metadata=metadata)
+            metadata = {
+                "query": q,
+                "page": page,
+                "per_page": per_page,
+                "strict": bool(strict),
+                "file_ids": file_ids,
+            }
+            await cache.set(
+                cache_key,
+                {
+                    "results": page_results,
+                    "total": total,
+                    "page": page,
+                    "per_page": per_page,
+                },
+                metadata=metadata,
+            )
         except Exception:
             logger.exception("search cache set failed")
 
@@ -4174,22 +5587,74 @@ async def search_stream(
     w_quality = _get_w("RANK_QUALITY_WEIGHT", QUALITY_WEIGHT)
     w_codec = _get_w("RANK_CODEC_WEIGHT", CODEC_WEIGHT)
 
-    fuzzy_enabled = os.getenv("ATLAS_SEARCH_FUZZY", "true").lower() in ("1", "true", "yes")
+    fuzzy_enabled = os.getenv("ATLAS_SEARCH_FUZZY", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     # Precision-first compound: no fuzzy on the precision clauses; a single
     # low-boost fuzzy clause on search_text acts as the typo tier.
     should = []
-    should.append({"phrase": {"query": q, "path": "title_phrase", "score": {"boost": {"value": w_title * 3.0}}}})
-    should.append({"text": {"query": q, "path": "title_tokens", "score": {"boost": {"value": w_title}}}})
-    should.append({"text": {"query": q, "path": "filename", "score": {"boost": {"value": w_fname}}}})
-    should.append({"text": {"query": q, "path": "quality_tokens", "score": {"boost": {"value": w_quality}}}})
-    should.append({"text": {"query": q, "path": "codec_tokens", "score": {"boost": {"value": w_codec}}}})
-    fuzzy_clause = {"text": {"query": q, "path": "search_text", "score": {"boost": {"value": max(1.0, w_trigram * 0.2)}}}}
+    should.append(
+        {
+            "phrase": {
+                "query": q,
+                "path": "title_phrase",
+                "score": {"boost": {"value": w_title * 3.0}},
+            }
+        }
+    )
+    should.append(
+        {
+            "text": {
+                "query": q,
+                "path": "title_tokens",
+                "score": {"boost": {"value": w_title}},
+            }
+        }
+    )
+    should.append(
+        {
+            "text": {
+                "query": q,
+                "path": "filename",
+                "score": {"boost": {"value": w_fname}},
+            }
+        }
+    )
+    should.append(
+        {
+            "text": {
+                "query": q,
+                "path": "quality_tokens",
+                "score": {"boost": {"value": w_quality}},
+            }
+        }
+    )
+    should.append(
+        {
+            "text": {
+                "query": q,
+                "path": "codec_tokens",
+                "score": {"boost": {"value": w_codec}},
+            }
+        }
+    )
+    fuzzy_clause = {
+        "text": {
+            "query": q,
+            "path": "search_text",
+            "score": {"boost": {"value": max(1.0, w_trigram * 0.2)}},
+        }
+    }
     if fuzzy_enabled:
         fuzzy_clause["text"]["fuzzy"] = {"maxEdits": 1, "prefixLength": 2}
     should.append(fuzzy_clause)
 
-    search_stage = {"$search": {"compound": {"should": should, "minimumShouldMatch": 1}}}
+    search_stage = {
+        "$search": {"compound": {"should": should, "minimumShouldMatch": 1}}
+    }
 
     proj_fields = {
         "chat_id": 1,
@@ -4211,7 +5676,11 @@ async def search_stream(
         "path": 1,
     }
 
-    pipeline = [search_stage, {"$addFields": {"score": {"$meta": "searchScore"}}}, {"$project": proj_fields}]
+    pipeline = [
+        search_stage,
+        {"$addFields": {"score": {"$meta": "searchScore"}}},
+        {"$project": proj_fields},
+    ]
     if thread_id is not None:
         try:
             tid = int(thread_id)
@@ -4246,15 +5715,26 @@ async def search_stream(
 
             q_tris = make_trigrams(q or "", TRIGRAM_MAX)
             stream_tokens = tokenize_query(q)
-            candidate_filter = {"$or": [{"title_tokens": {"$in": stream_tokens}}, {"trigrams": {"$in": q_tris}}]}
+            candidate_filter = {
+                "$or": [
+                    {"title_tokens": {"$in": stream_tokens}},
+                    {"trigrams": {"$in": q_tris}},
+                ]
+            }
             if thread_id is not None:
                 try:
                     tid = int(thread_id)
-                    candidate_filter = {"$and": [candidate_filter, {"message_thread_id": tid}]}
+                    candidate_filter = {
+                        "$and": [candidate_filter, {"message_thread_id": tid}]
+                    }
                 except Exception:
                     pass
 
-            cursor2 = coll.find(candidate_filter, proj_fields).sort([("timestamp", -1)]).batch_size(per_batch)
+            cursor2 = (
+                coll.find(candidate_filter, proj_fields)
+                .sort([("timestamp", -1)])
+                .batch_size(per_batch)
+            )
 
             async def gen2():
                 async for doc in cursor2:

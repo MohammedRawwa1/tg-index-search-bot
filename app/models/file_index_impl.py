@@ -33,6 +33,7 @@ CANDIDATE_LIMIT = 800
 class FileIndex:
     def __init__(self, db):
         self._coll = db.get_collection("files")
+
         # Load ranking weights from environment to allow remote tuning.
         def _envf(name, default):
             try:
@@ -48,10 +49,14 @@ class FileIndex:
         self.PREFIX_BOOST = _envf("RANK_PREFIX_BOOST", PREFIX_BOOST)
         self.TRIGRAM_WEIGHT = _envf("RANK_TRIGRAM_WEIGHT", TRIGRAM_WEIGHT)
         self.FILENAME_MATCH = _envf("RANK_FILENAME_MATCH", FILENAME_MATCH)
-        self.FNAME_LEN_PENALTY_DIV = _envf("RANK_FNAME_LEN_PENALTY_DIV", FNAME_LEN_PENALTY_DIV)
+        self.FNAME_LEN_PENALTY_DIV = _envf(
+            "RANK_FNAME_LEN_PENALTY_DIV", FNAME_LEN_PENALTY_DIV
+        )
         self.RECENCY_WEIGHT = _envf("RANK_RECENCY_WEIGHT", 2.0)
         try:
-            self.CANDIDATE_LIMIT = int(os.getenv("RANK_CANDIDATE_LIMIT", CANDIDATE_LIMIT))
+            self.CANDIDATE_LIMIT = int(
+                os.getenv("RANK_CANDIDATE_LIMIT", CANDIDATE_LIMIT)
+            )
         except Exception:
             self.CANDIDATE_LIMIT = CANDIDATE_LIMIT
 
@@ -128,7 +133,9 @@ class FileIndex:
         doc: Dict[str, Any] = {
             "chat_id": int(chat_id),
             "message_id": int(message_id),
-            "message_thread_id": int(message_thread_id) if message_thread_id is not None else None,
+            "message_thread_id": int(message_thread_id)
+            if message_thread_id is not None
+            else None,
             "filename": filename,
             "extension": extension,
             "title_tokens": token_struct.get("title_tokens", []),
@@ -169,7 +176,10 @@ class FileIndex:
         # mark duplicates (same chat_id + filename but different message_id)
         try:
             # mark duplicates using normalized filename / title tokens for more robust matching
-            dup_query = {"chat_id": doc["chat_id"], "message_id": {"$ne": doc["message_id"]}}
+            dup_query = {
+                "chat_id": doc["chat_id"],
+                "message_id": {"$ne": doc["message_id"]},
+            }
             if norm_filename:
                 dup_query["norm_filename"] = norm_filename
             else:
@@ -201,27 +211,36 @@ class FileIndex:
                         file_ident = f"{int(doc['chat_id'])}:{int(doc['message_id'])}"
                         await cache.invalidate_by_file_ids([file_ident])
                     except Exception:
-                        logger.debug("upsert_file: cache.invalidate_by_file_ids failed for {}", file_ident)
+                        logger.debug(
+                            "upsert_file: cache.invalidate_by_file_ids failed for {}",
+                            file_ident,
+                        )
             except Exception:
                 # running outside of web app or cache unavailable
                 pass
         except Exception:
             pass
 
-    def search_by_tokens(self, tokens: List[str], limit: int = 20) -> List[Dict[str, Any]]:
+    def search_by_tokens(
+        self, tokens: List[str], limit: int = 20
+    ) -> List[Dict[str, Any]]:
         if not tokens:
             return []
         # Use title_tokens and return documents that contain any of the tokens
         cursor = (
-            self._coll.find({"title_tokens": {"$in": tokens}}).sort("timestamp", -1).limit(limit)
+            self._coll.find({"title_tokens": {"$in": tokens}})
+            .sort("timestamp", -1)
+            .limit(limit)
         )
         return list(cursor)
 
-    def _prefix_fallback(self, tokens: List[str], limit: int = 50) -> List[Dict[str, Any]]:
+    def _prefix_fallback(
+        self, tokens: List[str], limit: int = 50
+    ) -> List[Dict[str, Any]]:
         # fallback using prefix regex on title tokens or filename
         regexes = []
         for t in tokens:
-            regexes.append(re.compile(rf'^{re.escape(t)}', re.IGNORECASE))
+            regexes.append(re.compile(rf"^{re.escape(t)}", re.IGNORECASE))
         # build $or query: any title_tokens matches regex OR filename contains prefix
         or_clauses = []
         for r in regexes:
@@ -265,7 +284,9 @@ class FileIndex:
                 if "chat_id" in filters:
                     f_clauses.append({"chat_id": int(filters.get("chat_id"))})
                 if "message_thread_id" in filters:
-                    f_clauses.append({"message_thread_id": int(filters.get("message_thread_id"))})
+                    f_clauses.append(
+                        {"message_thread_id": int(filters.get("message_thread_id"))}
+                    )
                 if "extension" in filters:
                     ext_val = filters.get("extension")
                     if isinstance(ext_val, dict):
@@ -276,16 +297,26 @@ class FileIndex:
                 if "year" in filters:
                     f_clauses.append({"year": int(filters.get("year"))})
                 if "min_duration" in filters:
-                    f_clauses.append({"duration": {"$gte": float(filters.get("min_duration"))}})
+                    f_clauses.append(
+                        {"duration": {"$gte": float(filters.get("min_duration"))}}
+                    )
                 if "max_duration" in filters:
-                    f_clauses.append({"duration": {"$lte": float(filters.get("max_duration"))}})
+                    f_clauses.append(
+                        {"duration": {"$lte": float(filters.get("max_duration"))}}
+                    )
                 if "min_size" in filters:
-                    f_clauses.append({"file_size": {"$gte": int(filters.get("min_size"))}})
+                    f_clauses.append(
+                        {"file_size": {"$gte": int(filters.get("min_size"))}}
+                    )
                 if "max_size" in filters:
-                    f_clauses.append({"file_size": {"$lte": int(filters.get("max_size"))}})
+                    f_clauses.append(
+                        {"file_size": {"$lte": int(filters.get("max_size"))}}
+                    )
                 # resolution bucket: allow providing min_height
                 if "min_height" in filters:
-                    f_clauses.append({"height": {"$gte": int(filters.get("min_height"))}})
+                    f_clauses.append(
+                        {"height": {"$gte": int(filters.get("min_height"))}}
+                    )
             except Exception:
                 pass
 
@@ -303,14 +334,19 @@ class FileIndex:
         def _classify(docs) -> None:
             for doc in docs:
                 try:
-                    key = (int(doc.get("chat_id") or 0), int(doc.get("message_id") or 0))
+                    key = (
+                        int(doc.get("chat_id") or 0),
+                        int(doc.get("message_id") or 0),
+                    )
                 except Exception:
                     key = (0, 0)
                 if key in seen:
                     continue
                 seen.add(key)
                 try:
-                    match = classify_match(q_text, tokens, doc, q_tris, allow_broad=allow_broad)
+                    match = classify_match(
+                        q_text, tokens, doc, q_tris, allow_broad=allow_broad
+                    )
                 except Exception:
                     continue
                 if match.tier == NONE_TIER:
@@ -320,16 +356,20 @@ class FileIndex:
                 classified.append(doc)
 
         def _count_at(tier: str) -> int:
-            return sum(1 for d in classified if accepts_tier(d.get("_tier", NONE_TIER), tier))
+            return sum(
+                1 for d in classified if accepts_tier(d.get("_tier", NONE_TIER), tier)
+            )
 
         # Stage 1 — exact token candidates (title/quality/codec hits)
         try:
             candidate_filter = _with_filters(
-                {"$or": [
-                    {"title_tokens": {"$in": tokens}},
-                    {"quality_tokens": {"$in": tokens}},
-                    {"codec_tokens": {"$in": tokens}},
-                ]}
+                {
+                    "$or": [
+                        {"title_tokens": {"$in": tokens}},
+                        {"quality_tokens": {"$in": tokens}},
+                        {"codec_tokens": {"$in": tokens}},
+                    ]
+                }
             )
             _classify(self._coll.find(candidate_filter).limit(self.CANDIDATE_LIMIT))
         except Exception:
@@ -341,10 +381,23 @@ class FileIndex:
                 or_clauses = []
                 for t in tokens:
                     or_clauses.append(
-                        {"title_tokens": {"$elemMatch": {"$regex": f"^{re.escape(t)}", "$options": "i"}}}
+                        {
+                            "title_tokens": {
+                                "$elemMatch": {
+                                    "$regex": f"^{re.escape(t)}",
+                                    "$options": "i",
+                                }
+                            }
+                        }
                     )
-                    or_clauses.append({"filename": {"$regex": f"^{re.escape(t)}", "$options": "i"}})
-                _classify(self._coll.find(_with_filters({"$or": or_clauses})).limit(self.CANDIDATE_LIMIT))
+                    or_clauses.append(
+                        {"filename": {"$regex": f"^{re.escape(t)}", "$options": "i"}}
+                    )
+                _classify(
+                    self._coll.find(_with_filters({"$or": or_clauses})).limit(
+                        self.CANDIDATE_LIMIT
+                    )
+                )
             except Exception:
                 pass
 
@@ -353,7 +406,9 @@ class FileIndex:
             try:
                 if q_tris:
                     _classify(
-                        self._coll.find(_with_filters({"trigrams": {"$in": q_tris}})).limit(self.CANDIDATE_LIMIT)
+                        self._coll.find(
+                            _with_filters({"trigrams": {"$in": q_tris}})
+                        ).limit(self.CANDIDATE_LIMIT)
                     )
             except Exception:
                 pass
@@ -370,7 +425,11 @@ class FileIndex:
             min_tier_used = "all"
         else:
             min_tier_used = resolve_min_tier(classified, start_tier=start_tier)
-        accepted = [d for d in classified if accepts_tier(d.get("_tier", NONE_TIER), min_tier_used)]
+        accepted = [
+            d
+            for d in classified
+            if accepts_tier(d.get("_tier", NONE_TIER), min_tier_used)
+        ]
 
         # deduplicate by filename (case-insensitive) keeping highest-scoring doc
         deduped = {}
@@ -380,7 +439,9 @@ class FileIndex:
                 key = None
                 try:
                     # prefer normalized filename if present; fall back to computed norm
-                    norm = doc.get("norm_filename") or self._normalize_filename(doc.get("filename") or "")
+                    norm = doc.get("norm_filename") or self._normalize_filename(
+                        doc.get("filename") or ""
+                    )
                     norm = (norm or "").strip().lower()
                     if norm:
                         key = norm
@@ -401,11 +462,17 @@ class FileIndex:
         # sort by (tier priority, score, timestamp) desc — tier dominates
         try:
             final_results.sort(
-                key=lambda r: (tier_priority(r.get("_tier")), r.get("_score", 0.0), r.get("timestamp")),
+                key=lambda r: (
+                    tier_priority(r.get("_tier")),
+                    r.get("_score", 0.0),
+                    r.get("timestamp"),
+                ),
                 reverse=True,
             )
         except Exception:
-            final_results.sort(key=lambda r: (r.get("_score", 0.0), r.get("timestamp")), reverse=True)
+            final_results.sort(
+                key=lambda r: (r.get("_score", 0.0), r.get("timestamp")), reverse=True
+            )
 
         total = len(final_results)
         start = (page - 1) * per_page
@@ -450,16 +517,23 @@ class FileIndex:
             # ensure trigrams exist for fuzzy matching
             if "trigrams" not in doc:
                 try:
-                    doc["trigrams"] = make_trigrams(doc.get("search_text", "") or doc.get("filename", ""), TRIGRAM_MAX)
+                    doc["trigrams"] = make_trigrams(
+                        doc.get("search_text", "") or doc.get("filename", ""),
+                        TRIGRAM_MAX,
+                    )
                 except Exception:
                     doc["trigrams"] = []
             # ensure normalized filename is present for bulk docs
             if "norm_filename" not in doc:
                 try:
                     if doc.get("title_tokens"):
-                        doc["norm_filename"] = " ".join([t.lower() for t in doc.get("title_tokens") if t])
+                        doc["norm_filename"] = " ".join(
+                            [t.lower() for t in doc.get("title_tokens") if t]
+                        )
                     else:
-                        doc["norm_filename"] = self._normalize_filename(doc.get("filename") or "")
+                        doc["norm_filename"] = self._normalize_filename(
+                            doc.get("filename") or ""
+                        )
                 except Exception:
                     doc["norm_filename"] = ""
             # full-title phrase string used by Atlas Search phrase queries
@@ -477,7 +551,10 @@ class FileIndex:
             for d in docs:
                 bulk_ops.append(
                     UpdateOne(
-                        {"chat_id": int(d["chat_id"]), "message_id": int(d["message_id"])},
+                        {
+                            "chat_id": int(d["chat_id"]),
+                            "message_id": int(d["message_id"]),
+                        },
                         {"$set": d},
                         upsert=True,
                     )
@@ -489,7 +566,10 @@ class FileIndex:
             for d in docs:
                 try:
                     self._coll.update_one(
-                        {"chat_id": int(d["chat_id"]), "message_id": int(d["message_id"])},
+                        {
+                            "chat_id": int(d["chat_id"]),
+                            "message_id": int(d["message_id"]),
+                        },
                         {"$set": d},
                         upsert=True,
                     )
@@ -532,7 +612,9 @@ class FileIndex:
                                 try:
                                     asyncio.run(cache.invalidate_by_file_ids(file_ids))
                                 except Exception:
-                                    logger.exception("bulk_upsert_files: synchronous cache.invalidate_by_file_ids failed")
+                                    logger.exception(
+                                        "bulk_upsert_files: synchronous cache.invalidate_by_file_ids failed"
+                                    )
                         except Exception:
                             pass
                 except Exception:

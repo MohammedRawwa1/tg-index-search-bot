@@ -44,10 +44,12 @@ class MongoService:
             }
 
             if _uses_tls(self.uri):
-                kwargs.update({
-                    "tls": True,
-                    "tlsCAFile": certifi.where(),
-                })
+                kwargs.update(
+                    {
+                        "tls": True,
+                        "tlsCAFile": certifi.where(),
+                    }
+                )
 
             self.client = MongoClient(self.uri, **kwargs)
 
@@ -67,14 +69,11 @@ class MongoService:
 
             logger.exception("MongoDB connection failed")
 
-            raise RuntimeError(
-                f"MongoDB connection failed: {exc}"
-            ) from exc
+            raise RuntimeError(f"MongoDB connection failed: {exc}") from exc
 
     def _ensure_connected(self):
         if self.client is None or self.db is None:
             self.connect()
-
 
     def _build_md_link(self, doc: Dict[str, Any]) -> str:
         try:
@@ -108,11 +107,13 @@ class MongoService:
         self._ensure_connected()
         col = self.db.get_collection("files")
 
-        token_query = {"$or": [
-            {"title_tokens": {"$in": tokens}},
-            {"quality_tokens": {"$in": tokens}},
-            {"codec_tokens": {"$in": tokens}},
-        ]}
+        token_query = {
+            "$or": [
+                {"title_tokens": {"$in": tokens}},
+                {"quality_tokens": {"$in": tokens}},
+                {"codec_tokens": {"$in": tokens}},
+            ]
+        }
         text_query = {"$text": {"$search": query}}
         final_query = {"$or": [token_query, text_query]}
 
@@ -190,11 +191,13 @@ class MongoService:
 
         col = self.db.get_collection("files")
 
-        col.create_index([
-            ("chat_id", 1),
-            ("message_thread_id", 1),
-            ("timestamp", -1),
-        ])
+        col.create_index(
+            [
+                ("chat_id", 1),
+                ("message_thread_id", 1),
+                ("timestamp", -1),
+            ]
+        )
 
         col.create_index(
             [("chat_id", 1), ("message_id", 1)],
@@ -218,15 +221,11 @@ class MongoService:
         try:
             self._ensure_connected()
         except Exception:
-            logger.exception(
-                "get_last_indexed: cannot connect to MongoDB"
-            )
+            logger.exception("get_last_indexed: cannot connect to MongoDB")
             return 0
 
         try:
-            doc = self.db.index_state.find_one(
-                {"chat_id": chat_id}
-            )
+            doc = self.db.index_state.find_one({"chat_id": chat_id})
 
             if not doc:
                 return 0
@@ -242,7 +241,5 @@ class MongoService:
                 return 0
 
         except Exception:
-            logger.exception(
-                "get_last_indexed: unexpected error"
-            )
+            logger.exception("get_last_indexed: unexpected error")
             return 0

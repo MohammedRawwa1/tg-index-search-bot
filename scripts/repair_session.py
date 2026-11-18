@@ -50,7 +50,11 @@ def backup_and_remove(file: pathlib.Path, backup_dir: pathlib.Path) -> pathlib.P
 
 
 def run_create_export(session_name: str) -> int:
-    script = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "create_user_session.py"
+    script = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "create_user_session.py"
+    )
     cmd = [sys.executable, str(script), "--export", session_name]
     print("Launching interactive session creation to export SESSION_STRING:")
     print(" ", " ".join(cmd))
@@ -60,17 +64,35 @@ def run_create_export(session_name: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
-    p = argparse.ArgumentParser(description="Repair Pyrogram .session files and optionally export SESSION_STRING")
-    p.add_argument("--session-name", "-s", help="Target session name (without .session)")
-    p.add_argument("--all", action="store_true", help="Operate on all found .session files")
-    p.add_argument("--backup-dir", help="Directory to store backups (default: ./session_backups)")
-    p.add_argument("--export", action="store_true", help="After repair, run create_user_session.py --export to recreate + print SESSION_STRING")
-    p.add_argument("--yes", "-y", action="store_true", help="Assume yes for confirmations")
+    p = argparse.ArgumentParser(
+        description="Repair Pyrogram .session files and optionally export SESSION_STRING"
+    )
+    p.add_argument(
+        "--session-name", "-s", help="Target session name (without .session)"
+    )
+    p.add_argument(
+        "--all", action="store_true", help="Operate on all found .session files"
+    )
+    p.add_argument(
+        "--backup-dir", help="Directory to store backups (default: ./session_backups)"
+    )
+    p.add_argument(
+        "--export",
+        action="store_true",
+        help="After repair, run create_user_session.py --export to recreate + print SESSION_STRING",
+    )
+    p.add_argument(
+        "--yes", "-y", action="store_true", help="Assume yes for confirmations"
+    )
 
     args = p.parse_args(argv)
 
     project_root = pathlib.Path(__file__).resolve().parents[1]
-    backup_dir = pathlib.Path(args.backup_dir) if args.backup_dir else project_root / "session_backups"
+    backup_dir = (
+        pathlib.Path(args.backup_dir)
+        if args.backup_dir
+        else project_root / "session_backups"
+    )
 
     if args.session_name:
         target = project_root / f"{args.session_name}.session"
@@ -89,7 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     if not files:
         print("No .session files found in project root.")
         if args.export:
-            session_name = args.session_name or os.getenv("SESSION_NAME") or "user_session"
+            session_name = (
+                args.session_name or os.getenv("SESSION_NAME") or "user_session"
+            )
             return run_create_export(session_name)
         return 0
 
@@ -122,7 +146,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.export:
         # Choose a session name for recreation
-        session_name = args.session_name or os.getenv("SESSION_NAME") or (files[0].stem if files else "user_session")
+        session_name = (
+            args.session_name
+            or os.getenv("SESSION_NAME")
+            or (files[0].stem if files else "user_session")
+        )
         rc = run_create_export(session_name)
         return rc
 

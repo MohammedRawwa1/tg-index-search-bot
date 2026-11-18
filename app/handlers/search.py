@@ -8,29 +8,43 @@ from app.i18n import resolve_lang, t
 from app.services.tokenizer import tokenize_query
 from app.services.textnorm import normalize_text
 from app.models.file_index_impl import FileIndex
-from app.utils.helpers import (
-    escape_markdown,
-    escape_url,
-    render_paginated_page
-)
+from app.utils.helpers import escape_markdown, escape_url, render_paginated_page
 from app.utils.logger import logger
 from app.config.settings import settings
 import re
 
 
-async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: str | None, md_text: str, reply_markup_obj=None, edit_msg=None, max_msg: int | None = None):
+async def send_markdown_chunks(
+    client_obj: Client,
+    chat_id: int,
+    header_text: str | None,
+    md_text: str,
+    reply_markup_obj=None,
+    edit_msg=None,
+    max_msg: int | None = None,
+):
     """Send large markdown text as multiple safe-sized messages.
 
     Converts Markdown links to HTML anchors when possible and sends the
     chunks with `parse_mode="HTML"`, falling back to plain text on errors.
     """
     try:
-        MAX_MSG = int(max_msg) if max_msg is not None else int(getattr(settings, "MAX_MSG", 4000))
+        MAX_MSG = (
+            int(max_msg)
+            if max_msg is not None
+            else int(getattr(settings, "MAX_MSG", 4000))
+        )
     except Exception:
         MAX_MSG = 4000
 
     try:
-        from app.utils.helpers import chunk_lines_by_char_limit, md_to_plain_text, unescape_for_plain_text, md_to_html
+        from app.utils.helpers import (
+            chunk_lines_by_char_limit,
+            md_to_plain_text,
+            unescape_for_plain_text,
+            md_to_html,
+        )
+
         _md_to_html = md_to_html
     except Exception:
         chunk_lines_by_char_limit = None
@@ -59,7 +73,9 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
             chunks.append("\n".join(cur))
 
     for idx, chunk in enumerate(chunks):
-        text_md = (header_text + "\n\n" + chunk) if (idx == 0 and header_text) else chunk
+        text_md = (
+            (header_text + "\n\n" + chunk) if (idx == 0 and header_text) else chunk
+        )
         try:
             text_html = None
             # Unescape any Markdown-v1 backslash escapes that may have been
@@ -67,6 +83,7 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
             try:
                 from app.utils.helpers import unescape_for_plain_text
             except Exception:
+
                 def unescape_for_plain_text(x):
                     return x
 
@@ -86,34 +103,69 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
                 # try to edit original message with first chunk
                 if idx == 0 and edit_msg:
                     try:
-                        await edit_msg.edit_text(text_html, reply_markup=reply_markup_obj, parse_mode="HTML")
+                        await edit_msg.edit_text(
+                            text_html, reply_markup=reply_markup_obj, parse_mode="HTML"
+                        )
                         continue
                     except Exception as e:
-                        logger.exception("edit_text HTML failed (attempting plain fallback): {}", e)
+                        logger.exception(
+                            "edit_text HTML failed (attempting plain fallback): {}", e
+                        )
                         try:
-                            fallback_plain = md_to_plain_text(text_md) if md_to_plain_text else (unescape_for_plain_text(text_md) if unescape_for_plain_text else text_md)
-                            await edit_msg.edit_text(fallback_plain, reply_markup=reply_markup_obj)
+                            fallback_plain = (
+                                md_to_plain_text(text_md)
+                                if md_to_plain_text
+                                else (
+                                    unescape_for_plain_text(text_md)
+                                    if unescape_for_plain_text
+                                    else text_md
+                                )
+                            )
+                            await edit_msg.edit_text(
+                                fallback_plain, reply_markup=reply_markup_obj
+                            )
                             continue
                         except Exception as e2:
-                            logger.exception("edit_text plain fallback also failed: {}", e2)
+                            logger.exception(
+                                "edit_text plain fallback also failed: {}", e2
+                            )
                             pass
 
                 # send as new message
                 try:
                     if idx == 0:
-                        await client_obj.send_message(chat_id, text_html, reply_markup=reply_markup_obj, parse_mode="HTML")
+                        await client_obj.send_message(
+                            chat_id,
+                            text_html,
+                            reply_markup=reply_markup_obj,
+                            parse_mode="HTML",
+                        )
                     else:
-                        await client_obj.send_message(chat_id, text_html, parse_mode="HTML")
+                        await client_obj.send_message(
+                            chat_id, text_html, parse_mode="HTML"
+                        )
                     try:
                         await asyncio.sleep(0.12)
                     except Exception:
                         pass
                 except Exception as e:
-                    logger.exception("send_message HTML failed; falling back to plain: {}", e)
+                    logger.exception(
+                        "send_message HTML failed; falling back to plain: {}", e
+                    )
                     try:
-                        plain = md_to_plain_text(text_md) if md_to_plain_text else (unescape_for_plain_text(text_md) if unescape_for_plain_text else text_md)
+                        plain = (
+                            md_to_plain_text(text_md)
+                            if md_to_plain_text
+                            else (
+                                unescape_for_plain_text(text_md)
+                                if unescape_for_plain_text
+                                else text_md
+                            )
+                        )
                         if idx == 0:
-                            await client_obj.send_message(chat_id, plain, reply_markup=reply_markup_obj)
+                            await client_obj.send_message(
+                                chat_id, plain, reply_markup=reply_markup_obj
+                            )
                         else:
                             await client_obj.send_message(chat_id, plain)
                         try:
@@ -127,13 +179,17 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
                 try:
                     if idx == 0 and edit_msg:
                         try:
-                            await edit_msg.edit_text(text_md, reply_markup=reply_markup_obj)
+                            await edit_msg.edit_text(
+                                text_md, reply_markup=reply_markup_obj
+                            )
                             continue
                         except Exception as e:
                             logger.exception("edit_text plain failed: {}", e)
                             pass
                     if idx == 0:
-                        await client_obj.send_message(chat_id, text_md, reply_markup=reply_markup_obj)
+                        await client_obj.send_message(
+                            chat_id, text_md, reply_markup=reply_markup_obj
+                        )
                     else:
                         await client_obj.send_message(chat_id, text_md)
                     try:
@@ -147,7 +203,9 @@ async def send_markdown_chunks(client_obj: Client, chat_id: int, header_text: st
             pass
 
 
-async def safe_edit_or_send(client_obj: Client, edit_msg, orig_message: Message, text: str, **kwargs):
+async def safe_edit_or_send(
+    client_obj: Client, edit_msg, orig_message: Message, text: str, **kwargs
+):
     """Try to edit `edit_msg`; on failure send a new message as a reply to `orig_message`.
 
     This ensures the user always receives feedback when edit fails (for example
@@ -158,14 +216,18 @@ async def safe_edit_or_send(client_obj: Client, edit_msg, orig_message: Message,
             await edit_msg.edit_text(text, **kwargs)
             return
     except Exception:
-        logger.exception("safe_edit_or_send: edit_text failed, will try sending new message")
+        logger.exception(
+            "safe_edit_or_send: edit_text failed, will try sending new message"
+        )
 
     try:
         if orig_message:
             await orig_message.reply_text(text, **kwargs)
             return
     except Exception:
-        logger.exception("safe_edit_or_send: reply_text failed, will try client.send_message")
+        logger.exception(
+            "safe_edit_or_send: reply_text failed, will try client.send_message"
+        )
 
     try:
         # fallback: send directly to chat id if available
@@ -196,10 +258,7 @@ async def iter_results(file_index, tokens, query, batch=100):
     page = 1
     while True:
         res = file_index.search_with_ranking(
-            tokens,
-            query=query,
-            page=page,
-            per_page=batch
+            tokens, query=query, page=page, per_page=batch
         )
         results = res.get("results", [])
         if not results:
@@ -253,7 +312,9 @@ def build_line_ref(r, query: str) -> dict:
     except Exception:
         ref["chat_id"] = None
     try:
-        ref["message_id"] = int(r.get("message_id")) if r.get("message_id") is not None else None
+        ref["message_id"] = (
+            int(r.get("message_id")) if r.get("message_id") is not None else None
+        )
     except Exception:
         ref["message_id"] = None
     try:
@@ -261,7 +322,9 @@ def build_line_ref(r, query: str) -> dict:
     except Exception:
         ref["filename"] = ""
     try:
-        ref["match_score"] = float(r.get("_score")) if r.get("_score") is not None else None
+        ref["match_score"] = (
+            float(r.get("_score")) if r.get("_score") is not None else None
+        )
     except Exception:
         ref["match_score"] = None
     # Heuristic match_type
@@ -375,7 +438,13 @@ async def save_pages(store, query, tokens, chunk_iter, user_id):
             pages.append(saved["page_id"])
         except Exception:
             logger.exception("save_pages: failed to save part {}", part)
-    logger.info("save_pages: query={} parts={} total_results={} user={}", query, total_parts, total_results, user_id)
+    logger.info(
+        "save_pages: query={} parts={} total_results={} user={}",
+        query,
+        total_parts,
+        total_results,
+        user_id,
+    )
     return pages
 
 
@@ -421,7 +490,13 @@ def register_search_handlers(client: Client, mongo):
             try:
                 ref = build_line_ref(r, query)
             except Exception:
-                ref = {"chat_id": None, "message_id": None, "filename": r.get("filename") if r else "", "match_score": None, "match_type": "unknown"}
+                ref = {
+                    "chat_id": None,
+                    "message_id": None,
+                    "filename": r.get("filename") if r else "",
+                    "match_score": None,
+                    "match_type": "unknown",
+                }
             lines.append(ln)
             refs.append(ref)
             i += 1
@@ -432,6 +507,7 @@ def register_search_handlers(client: Client, mongo):
         MAX_MSG = getattr(settings, "MAX_MSG", 4000)
         CHUNK_LIMIT = MAX_MSG - 200
         from app.utils.helpers import chunk_lines_with_refs
+
         chunks = chunk_lines_with_refs(lines, refs, CHUNK_LIMIT)
 
         # -------------------------------
@@ -440,16 +516,12 @@ def register_search_handlers(client: Client, mongo):
         store = getattr(client, "_internal_page_store", None)
 
         if not store:
-            await safe_edit_or_send(client, searching, message, t("no_page_store", lang))
+            await safe_edit_or_send(
+                client, searching, message, t("no_page_store", lang)
+            )
             return
 
-        pages = await save_pages(
-            store,
-            query,
-            tokens,
-            chunks,
-            uid
-        )
+        pages = await save_pages(store, query, tokens, chunks, uid)
 
         if not pages:
             await safe_edit_or_send(client, searching, message, t("no_results", lang))
@@ -470,21 +542,39 @@ def register_search_handlers(client: Client, mongo):
                         pdoc = await store.get_page(pid)
                         part_content = ""
                         if pdoc:
-                            part_content = pdoc.get("content") or pdoc.get("markdown") or ""
+                            part_content = (
+                                pdoc.get("content") or pdoc.get("markdown") or ""
+                            )
                         combined_parts.append(part_content)
                     except Exception:
                         combined_parts.append("")
 
                 combined_md = "\n".join([c for c in combined_parts if c])
                 header = (
-                    "*" + t("results_header", query=query, total=int(first.get('total_results', 0)), lang=lang) + "*\n\n"
+                    "*"
+                    + t(
+                        "results_header",
+                        query=query,
+                        total=int(first.get("total_results", 0)),
+                        lang=lang,
+                    )
+                    + "*\n\n"
                     if query
                     else ""
                 )
                 try:
-                    chat_id_target = message.chat.id if message and message.chat else None
+                    chat_id_target = (
+                        message.chat.id if message and message.chat else None
+                    )
                     reply_markup_obj = InlineKeyboardMarkup(kb) if kb else None
-                    await send_markdown_chunks(client, chat_id_target, header, combined_md, reply_markup_obj, edit_msg=searching)
+                    await send_markdown_chunks(
+                        client,
+                        chat_id_target,
+                        header,
+                        combined_md,
+                        reply_markup_obj,
+                        edit_msg=searching,
+                    )
                     return
                 except Exception as e:
                     logger.exception("auto stream failed: {}", e)
@@ -502,7 +592,15 @@ def register_search_handlers(client: Client, mongo):
                 chat_id_target = message.chat.id if message and message.chat else None
                 reply_markup_obj = InlineKeyboardMarkup(kb) if kb else None
                 try:
-                    await send_markdown_chunks(client, chat_id_target, None, text, reply_markup_obj, edit_msg=searching, max_msg=MAX_MSG)
+                    await send_markdown_chunks(
+                        client,
+                        chat_id_target,
+                        None,
+                        text,
+                        reply_markup_obj,
+                        edit_msg=searching,
+                        max_msg=MAX_MSG,
+                    )
                     return
                 except Exception as e:
                     logger.exception("chunked send failed: {}", e)
@@ -511,14 +609,19 @@ def register_search_handlers(client: Client, mongo):
 
         try:
             await searching.edit_text(
-                text,
-                reply_markup=InlineKeyboardMarkup(kb),
-                parse_mode="Markdown"
+                text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"
             )
         except Exception:
             # If editing the temporary 'searching' message fails, send the
             # rendered page as a fresh message so the user still receives it.
-            await safe_edit_or_send(client, searching, message, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+            await safe_edit_or_send(
+                client,
+                searching,
+                message,
+                text,
+                reply_markup=InlineKeyboardMarkup(kb),
+                parse_mode="Markdown",
+            )
 
     @client.on_message(filters.command("export"))
     async def export_all_handler(client: Client, message: Message):
@@ -567,6 +670,7 @@ def register_search_handlers(client: Client, mongo):
             content = "\n".join(lines)
             try:
                 from app.utils.helpers import md_to_markdown
+
                 md_safe = md_to_markdown(content)
             except Exception:
                 md_safe = content
@@ -576,7 +680,14 @@ def register_search_handlers(client: Client, mongo):
                 if query
                 else ""
             )
-            await send_markdown_chunks(client, message.chat.id, header, md_safe, reply_markup_obj=None, edit_msg=notice)
+            await send_markdown_chunks(
+                client,
+                message.chat.id,
+                header,
+                md_safe,
+                reply_markup_obj=None,
+                edit_msg=notice,
+            )
         except Exception as exc:
             logger.exception("export failed: {}", exc)
             await message.reply_text(t("export_failed", lang))
@@ -586,9 +697,9 @@ def register_search_handlers(client: Client, mongo):
             except Exception:
                 pass
 
-
     def _iter_with_index(file_index_obj, tokens, query, batch=200):
         """Helper: async generator that yields (index, result) starting at 1."""
+
         async def _gen():
             i = 1
             async for r in iter_results(file_index_obj, tokens, query, batch=batch):
@@ -596,7 +707,6 @@ def register_search_handlers(client: Client, mongo):
                 i += 1
 
         return _gen()
-
 
     # -------------------------------
     # 📄 CALLBACK HANDLER
@@ -609,6 +719,7 @@ def register_search_handlers(client: Client, mongo):
         if data.startswith("C|") or data.startswith("A|"):
             try:
                 from app.handlers.admin import handle_admin_callback
+
                 await handle_admin_callback(client, cq)
             except Exception as exc:
                 logger.exception("admin callback dispatch failed: {}", exc)
@@ -632,9 +743,7 @@ def register_search_handlers(client: Client, mongo):
             text, kb = render_paginated_page(page, None)
 
             await cq.message.edit_text(
-                text,
-                reply_markup=InlineKeyboardMarkup(kb),
-                parse_mode="Markdown"
+                text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"
             )
             await cq.answer()
             return

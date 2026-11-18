@@ -17,7 +17,14 @@ class AsyncSearchCache:
     auto-removed by MongoDB TTL index.
     """
 
-    def __init__(self, motor_client=None, db_name: Optional[str] = None, collection: str = "search_cache", max_entries: int = 1024, default_ttl: int = 3600):
+    def __init__(
+        self,
+        motor_client=None,
+        db_name: Optional[str] = None,
+        collection: str = "search_cache",
+        max_entries: int = 1024,
+        default_ttl: int = 3600,
+    ):
         self.client = motor_client
         self.db_name = db_name or getattr(settings, "DB_NAME", "test")
         self.collection = collection
@@ -28,7 +35,14 @@ class AsyncSearchCache:
         self._lock = asyncio.Lock()
 
     @staticmethod
-    def make_key(query: str, page: int = 1, per_page: int = 50, strict: bool = False, thread_id: Optional[int] = None, allow_broad: bool = False) -> str:
+    def make_key(
+        query: str,
+        page: int = 1,
+        per_page: int = 50,
+        strict: bool = False,
+        thread_id: Optional[int] = None,
+        allow_broad: bool = False,
+    ) -> str:
         s = f"q={query}|p={page}|r={per_page}|s={int(bool(strict))}|t={thread_id or ''}|b={int(bool(allow_broad))}"
         return hashlib.sha256(s.encode("utf-8", errors="ignore")).hexdigest()
 
@@ -93,13 +107,27 @@ class AsyncSearchCache:
                             self._cache.popitem(last=False)
                         except Exception:
                             break
-                    self._cache[key] = {"value": val, "expires_at": (exp.timestamp() if exp and isinstance(exp, datetime) else time.time() + self.default_ttl), "metadata": doc.get("metadata")}
+                    self._cache[key] = {
+                        "value": val,
+                        "expires_at": (
+                            exp.timestamp()
+                            if exp and isinstance(exp, datetime)
+                            else time.time() + self.default_ttl
+                        ),
+                        "metadata": doc.get("metadata"),
+                    }
                 return val
             except Exception:
                 return None
         return None
 
-    async def set(self, key: str, value: Any, metadata: Optional[dict] = None, ttl: Optional[int] = None) -> None:
+    async def set(
+        self,
+        key: str,
+        value: Any,
+        metadata: Optional[dict] = None,
+        ttl: Optional[int] = None,
+    ) -> None:
         ttl = int(ttl or self.default_ttl)
         # For in-memory entries store epoch float timestamps to avoid
         # ambiguity with naive datetimes and local timezone handling.
@@ -118,14 +146,23 @@ class AsyncSearchCache:
                 except Exception:
                     break
             # store numeric timestamp for in-memory checks
-            self._cache[key] = {"value": value, "expires_at": expires_at_ts, "metadata": metadata}
+            self._cache[key] = {
+                "value": value,
+                "expires_at": expires_at_ts,
+                "metadata": metadata,
+            }
 
         if self.client:
             try:
                 db = self.client[self.db_name]
                 col = db.get_collection(self.collection)
                 # persist a timezone-naive UTC datetime for Mongo TTL index
-                doc = {"_id": key, "value": value, "metadata": metadata, "expires_at": expires_at_dt}
+                doc = {
+                    "_id": key,
+                    "value": value,
+                    "metadata": metadata,
+                    "expires_at": expires_at_dt,
+                }
                 await col.replace_one({"_id": key}, doc, upsert=True)
             except Exception:
                 pass
@@ -148,7 +185,11 @@ class AsyncSearchCache:
     async def invalidate_by_query(self, query: str) -> None:
         # remove memory entries matching metadata.query
         async with self._lock:
-            keys = [k for k, v in list(self._cache.items()) if (v.get("metadata") or {}).get("query") == query]
+            keys = [
+                k
+                for k, v in list(self._cache.items())
+                if (v.get("metadata") or {}).get("query") == query
+            ]
             for k in keys:
                 try:
                     del self._cache[k]
@@ -185,7 +226,7 @@ class AsyncSearchCache:
                 try:
                     meta = v.get("metadata") or {}
                     fids = meta.get("file_ids") or []
-                    for fid in (fids or []):
+                    for fid in fids or []:
                         if str(fid) in idset:
                             keys.append(k)
                             break

@@ -12,6 +12,7 @@ import sys
 import pathlib
 import os
 import sys
+
 # Ensure project root is on sys.path so `import app` works when running
 # this script directly from the `scripts/` directory.
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -46,7 +47,9 @@ def main():
         sys.exit(2)
 
     coll = mongo.db.get_collection("files")
-    cursor = coll.find({"chat_id": chat_id}).sort([("message_thread_id", 1), ("timestamp", 1)])
+    cursor = coll.find({"chat_id": chat_id}).sort(
+        [("message_thread_id", 1), ("timestamp", 1)]
+    )
 
     groups = defaultdict(list)
     for d in cursor:

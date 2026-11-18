@@ -64,16 +64,16 @@ def normalize_bracket_links(raw_text: str) -> str:
                 j = ln.rfind("]", 0, idx)
                 if j == -1:
                     break
-                rest = ln[j + 1:]
+                rest = ln[j + 1 :]
                 # URL may contain balanced parentheses (mirrors _MD_LINK_RE) so
                 # bare links like `https://example.com/a(b)c` are not truncated.
                 m = re.match(r"\s*(https?://(?:[^\s())\]>]|\([^)]*\))+)", rest)
                 if m:
                     k = ln.rfind("[", 0, j)
                     if k != -1:
-                        label = ln[k + 1:j]
+                        label = ln[k + 1 : j]
                         url = m.group(1)
-                        ln = ln[:k] + f"[{label}]({url})" + rest[m.end():]
+                        ln = ln[:k] + f"[{label}]({url})" + rest[m.end() :]
                         converted = True
                     else:
                         break
@@ -112,6 +112,7 @@ def md_links_to_clickable(text: str) -> str:
     Backslash-escapes inserted for Telegram Markdown are removed so the
     result is human-friendly (e.g. an escaped underscore becomes a plain one).
     """
+
     def _rep(m):
         label = unescape_for_plain_text(m.group(1))
         return f"{label} — {m.group(2)}"
@@ -149,7 +150,9 @@ def encode_search_callback_token(token: str, page: int, per_page: int) -> str:
     return f"S|{token}|{page}|{per_page}"
 
 
-def decode_search_callback(data: str, token_resolver: Optional[callable] = None) -> Tuple[str, int, int]:
+def decode_search_callback(
+    data: str, token_resolver: Optional[callable] = None
+) -> Tuple[str, int, int]:
     """Decode callback data.
 
     Supports two formats:
@@ -240,22 +243,34 @@ def build_result_keyboard(results: list, start_index: int = 1) -> InlineKeyboard
         rows.append([InlineKeyboardButton(label, url=url)])
         # second row: action buttons (mark duplicate / ignore / report)
         action_row = [
-            InlineKeyboardButton("Mark Duplicate", callback_data=f"R|dup|{chat_id}|{msg_id}"),
-            InlineKeyboardButton("Ignore", callback_data=f"R|ignore|{chat_id}|{msg_id}"),
-            InlineKeyboardButton("Report", callback_data=f"R|report|{chat_id}|{msg_id}"),
+            InlineKeyboardButton(
+                "Mark Duplicate", callback_data=f"R|dup|{chat_id}|{msg_id}"
+            ),
+            InlineKeyboardButton(
+                "Ignore", callback_data=f"R|ignore|{chat_id}|{msg_id}"
+            ),
+            InlineKeyboardButton(
+                "Report", callback_data=f"R|report|{chat_id}|{msg_id}"
+            ),
         ]
         # if this result belongs to a forum/topic (message_thread_id), add a reindex button
         try:
             tid = r.get("message_thread_id")
             if tid is not None:
-                action_row.append(InlineKeyboardButton("Reindex Topic", callback_data=f"R|reindex|{chat_id}|{tid}"))
+                action_row.append(
+                    InlineKeyboardButton(
+                        "Reindex Topic", callback_data=f"R|reindex|{chat_id}|{tid}"
+                    )
+                )
         except Exception:
             pass
         rows.append(action_row)
     return InlineKeyboardMarkup(rows)
 
 
-def build_pagination_keyboard(query: str, page: int, per_page: int, total: int) -> InlineKeyboardMarkup:
+def build_pagination_keyboard(
+    query: str, page: int, per_page: int, total: int
+) -> InlineKeyboardMarkup:
     pages = (total + per_page - 1) // per_page
 
     def _make_cb(q: str, p: int, per: int) -> str:
@@ -273,22 +288,39 @@ def build_pagination_keyboard(query: str, page: int, per_page: int, total: int) 
     buttons = []
     # Prev
     if page > 1:
-        buttons.append(InlineKeyboardButton(t("prev", lang), callback_data=_make_cb(query, page - 1, per_page)))
+        buttons.append(
+            InlineKeyboardButton(
+                t("prev", lang), callback_data=_make_cb(query, page - 1, per_page)
+            )
+        )
     # Home (go to first page)
     if page > 1:
-        buttons.append(InlineKeyboardButton(t("home", lang), callback_data=_make_cb(query, 1, per_page)))
+        buttons.append(
+            InlineKeyboardButton(
+                t("home", lang), callback_data=_make_cb(query, 1, per_page)
+            )
+        )
     # Page indicator
     buttons.append(
         InlineKeyboardButton(
-            t("page_indicator", lang, page=page, pages=max(1, pages)), callback_data="noop"
+            t("page_indicator", lang, page=page, pages=max(1, pages)),
+            callback_data="noop",
         )
     )
     # End (go to last page)
     if page < pages:
-        buttons.append(InlineKeyboardButton(t("end", lang), callback_data=_make_cb(query, pages, per_page)))
+        buttons.append(
+            InlineKeyboardButton(
+                t("end", lang), callback_data=_make_cb(query, pages, per_page)
+            )
+        )
     # Next
     if page < pages:
-        buttons.append(InlineKeyboardButton(t("next", lang), callback_data=_make_cb(query, page + 1, per_page)))
+        buttons.append(
+            InlineKeyboardButton(
+                t("next", lang), callback_data=_make_cb(query, page + 1, per_page)
+            )
+        )
 
     return InlineKeyboardMarkup([buttons])
 
@@ -366,7 +398,7 @@ def time_ago(dt) -> str:
             then = dt
             # if timezone-aware, convert to UTC naive
             try:
-                if hasattr(then, 'tzinfo') and then.tzinfo is not None:
+                if hasattr(then, "tzinfo") and then.tzinfo is not None:
                     then = then.astimezone(tz=None).replace(tzinfo=None)
             except Exception:
                 pass
@@ -404,7 +436,7 @@ def escape_md_v2(text: str) -> str:
         if text is None:
             return ""
         # Escape characters required by MarkdownV2
-        return re.sub(r'([_\*\[\]\(\)~`>#+\-=|{}\\.!])', r"\\\1", str(text))
+        return re.sub(r"([_\*\[\]\(\)~`>#+\-=|{}\\.!])", r"\\\1", str(text))
     except Exception:
         return ""
 
@@ -462,7 +494,7 @@ def escape_markdown(text: str) -> str:
         # Escape a single backslash before the special characters used by
         # Markdown v1. Use a single backslash in the replacement so that
         # Telegram receives the proper escape sequence (e.g. "\_").
-        return re.sub(r'([*_`\[\]\\])', r"\\\1", str(text))
+        return re.sub(r"([*_`\[\]\\])", r"\\\1", str(text))
     except Exception:
         return ""
 
@@ -482,7 +514,7 @@ def unescape_for_plain_text(text: str) -> str:
         # special characters (e.g. "\\_" or "\\\\_" -> "_").
         # Some inputs may be double-escaped; allow any number of
         # backslashes before the escaped character.
-        return re.sub(r'\\+([*_`\[\]\\])', r"\1", str(text))
+        return re.sub(r"\\+([*_`\[\]\\])", r"\1", str(text))
     except Exception:
         return text or ""
 
@@ -701,7 +733,12 @@ def chunk_lines_with_refs(lines: list, refs: list, max_chars: int) -> list:
     return chunks
 
 
-def render_paginated_page(page: dict, query_override: str | None = None, max_msg: int | None = None, max_links_per_page: int | None = None):
+def render_paginated_page(
+    page: dict,
+    query_override: str | None = None,
+    max_msg: int | None = None,
+    max_links_per_page: int | None = None,
+):
     """Render a stored internal page into a (text, inline_keyboard_rows) tuple.
 
     - `page` is the document returned by InternalPageStore.get_page(...).
@@ -719,7 +756,7 @@ def render_paginated_page(page: dict, query_override: str | None = None, max_msg
     except Exception:
         settings = None
 
-    page_query = (page.get("query") or query_override or "")
+    page_query = page.get("query") or query_override or ""
     content_raw = page.get("content") or ""
     # Build both a Markdown-safe body (for attempts with parse_mode)
     # and a plain-text version used for fallbacks. We prefer sending
@@ -808,13 +845,31 @@ def render_paginated_page(page: dict, query_override: str | None = None, max_msg
         kb_rows.append(part_row)
 
     # Header (plain text)
-    max_links = max_links_per_page if max_links_per_page is not None else (getattr(settings, "MAX_LINKS_PER_PAGE", 100) if settings is not None else 100)
-    page_total = page.get("total_results") if page.get("total_results") is not None else (len(gp) * max_links)
-    header = t("results_header", query=page_query, total=page_total, lang=lang) + "\n\n" if page_query else ""
+    max_links = (
+        max_links_per_page
+        if max_links_per_page is not None
+        else (
+            getattr(settings, "MAX_LINKS_PER_PAGE", 100)
+            if settings is not None
+            else 100
+        )
+    )
+    page_total = (
+        page.get("total_results")
+        if page.get("total_results") is not None
+        else (len(gp) * max_links)
+    )
+    header = (
+        t("results_header", query=page_query, total=page_total, lang=lang) + "\n\n"
+        if page_query
+        else ""
+    )
 
     # Build full Markdown body (do not truncate here; callers decide how to split)
     md_header = (
-        "*" + t("results_header", query=page_query, total=page_total, lang=lang) + "*\n\n"
+        "*"
+        + t("results_header", query=page_query, total=page_total, lang=lang)
+        + "*\n\n"
         if page_query
         else ""
     )

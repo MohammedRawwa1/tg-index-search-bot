@@ -5,6 +5,7 @@ from peer_manager import get_all_peers
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+
 async def main():
     bot = Client("bot_session", bot_token=BOT_TOKEN)
     await bot.start()
@@ -21,5 +22,6 @@ async def main():
             print(f"❌ Failed to reach {chat_id}: {e}")
 
     await bot.stop()
+
 
 asyncio.run(main())

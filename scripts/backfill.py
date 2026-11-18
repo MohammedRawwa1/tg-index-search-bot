@@ -46,8 +46,16 @@ def _choose_client() -> Client:
     """Return a Pyrogram Client configured with BOT_TOKEN."""
     # Prefer SESSION_STRING or explicit API creds from environment to avoid locking local .session files
     session_string = os.getenv("SESSION_STRING") or os.getenv("TELETHON_SESSION")
-    api_id_env = os.getenv("API_ID") or os.getenv("TELETHON_API_ID") or os.getenv("TELEGRAM_APP_ID")
-    api_hash_env = os.getenv("API_HASH") or os.getenv("TELETHON_API_HASH") or os.getenv("TELEGRAM_API_HASH")
+    api_id_env = (
+        os.getenv("API_ID")
+        or os.getenv("TELETHON_API_ID")
+        or os.getenv("TELEGRAM_APP_ID")
+    )
+    api_hash_env = (
+        os.getenv("API_HASH")
+        or os.getenv("TELETHON_API_HASH")
+        or os.getenv("TELEGRAM_API_HASH")
+    )
     if session_string or (api_id_env and api_hash_env):
         params = {"name": "backfill_user"}
         if session_string:
@@ -58,7 +66,9 @@ def _choose_client() -> Client:
             except Exception:
                 params["api_id"] = api_id_env
             params["api_hash"] = str(api_hash_env)
-        print("Using API/user session for backfill (from SESSION_STRING or API_ID/API_HASH)")
+        print(
+            "Using API/user session for backfill (from SESSION_STRING or API_ID/API_HASH)"
+        )
         return Client(**params)
 
     # Project root session detection: prefer any local session file (*.session)
@@ -69,8 +79,16 @@ def _choose_client() -> Client:
         if session_name:
             session_file = project_root / f"{session_name}.session"
             if session_file.exists():
-                api_id = os.getenv("API_ID") or os.getenv("TELETHON_API_ID") or os.getenv("TELEGRAM_APP_ID")
-                api_hash = os.getenv("API_HASH") or os.getenv("TELETHON_API_HASH") or os.getenv("TELEGRAM_API_HASH")
+                api_id = (
+                    os.getenv("API_ID")
+                    or os.getenv("TELETHON_API_ID")
+                    or os.getenv("TELEGRAM_APP_ID")
+                )
+                api_hash = (
+                    os.getenv("API_HASH")
+                    or os.getenv("TELETHON_API_HASH")
+                    or os.getenv("TELEGRAM_API_HASH")
+                )
                 if not (api_id and api_hash):
                     for c in settings.API_CREDENTIALS:
                         if c.get("api_id") and c.get("api_hash"):
@@ -92,8 +110,16 @@ def _choose_client() -> Client:
         if session_files:
             # pick the first session file that isn't a known remote default (best-effort)
             session_name = session_files[0].stem
-            api_id = os.getenv("API_ID") or os.getenv("TELETHON_API_ID") or os.getenv("TELEGRAM_APP_ID")
-            api_hash = os.getenv("API_HASH") or os.getenv("TELETHON_API_HASH") or os.getenv("TELEGRAM_API_HASH")
+            api_id = (
+                os.getenv("API_ID")
+                or os.getenv("TELETHON_API_ID")
+                or os.getenv("TELEGRAM_APP_ID")
+            )
+            api_hash = (
+                os.getenv("API_HASH")
+                or os.getenv("TELETHON_API_HASH")
+                or os.getenv("TELEGRAM_API_HASH")
+            )
             if not (api_id and api_hash):
                 for c in settings.API_CREDENTIALS:
                     if c.get("api_id") and c.get("api_hash"):
@@ -114,8 +140,16 @@ def _choose_client() -> Client:
 
     # fallback: session string (useful when deploying)
     session_string = os.getenv("SESSION_STRING") or os.getenv("TELETHON_SESSION")
-    api_id = os.getenv("API_ID") or os.getenv("TELETHON_API_ID") or os.getenv("TELEGRAM_APP_ID")
-    api_hash = os.getenv("API_HASH") or os.getenv("TELETHON_API_HASH") or os.getenv("TELEGRAM_API_HASH")
+    api_id = (
+        os.getenv("API_ID")
+        or os.getenv("TELETHON_API_ID")
+        or os.getenv("TELEGRAM_APP_ID")
+    )
+    api_hash = (
+        os.getenv("API_HASH")
+        or os.getenv("TELETHON_API_HASH")
+        or os.getenv("TELEGRAM_API_HASH")
+    )
     if session_string or (api_id and api_hash):
         params = {"name": "backfill_user"}
         if session_string:
@@ -136,17 +170,29 @@ def _choose_client() -> Client:
     )
     if bot_token:
         # include API id/hash if present
-        api_id = api_id or next((c.get("api_id") for c in settings.API_CREDENTIALS if c.get("api_id")), None)
-        api_hash = api_hash or next((c.get("api_hash") for c in settings.API_CREDENTIALS if c.get("api_hash")), None)
+        api_id = api_id or next(
+            (c.get("api_id") for c in settings.API_CREDENTIALS if c.get("api_id")), None
+        )
+        api_hash = api_hash or next(
+            (c.get("api_hash") for c in settings.API_CREDENTIALS if c.get("api_hash")),
+            None,
+        )
         if api_id and api_hash:
             try:
                 api_id = int(api_id)
             except Exception:
                 pass
-            return Client("backfill_bot", api_id=api_id, api_hash=str(api_hash), bot_token=bot_token)
+            return Client(
+                "backfill_bot",
+                api_id=api_id,
+                api_hash=str(api_hash),
+                bot_token=bot_token,
+            )
         return Client("backfill_bot", bot_token=bot_token)
 
-    raise RuntimeError("No usable Telegram credentials found: set SESSION_STRING, API_ID/API_HASH, a local .session file, or BOT_TOKEN")
+    raise RuntimeError(
+        "No usable Telegram credentials found: set SESSION_STRING, API_ID/API_HASH, a local .session file, or BOT_TOKEN"
+    )
 
 
 async def _run(target_chat_id: Optional[int] = None):
@@ -198,7 +244,9 @@ async def _run(target_chat_id: Optional[int] = None):
                     resolved = chat
                     print(f"Resolved chat: {chat.title or chat.id}")
                 except Exception as e:
-                    print(f"get_chat() failed for {target_chat_id}: {e}. Trying username and dialog cache fallback...")
+                    print(
+                        f"get_chat() failed for {target_chat_id}: {e}. Trying username and dialog cache fallback..."
+                    )
                     # Try treating target as username (strip @ if present)
                     try:
                         uname = str(target_chat_id)
@@ -214,7 +262,16 @@ async def _run(target_chat_id: Optional[int] = None):
                             async for d in client.get_dialogs(limit=5000):
                                 try:
                                     cobj = d.chat
-                                    if getattr(cobj, "id", None) == target_chat_id or getattr(cobj, "username", None) == str(target_chat_id) or (getattr(cobj, "title", "") and str(target_chat_id).lower() in getattr(cobj, "title", "").lower()):
+                                    if (
+                                        getattr(cobj, "id", None) == target_chat_id
+                                        or getattr(cobj, "username", None)
+                                        == str(target_chat_id)
+                                        or (
+                                            getattr(cobj, "title", "")
+                                            and str(target_chat_id).lower()
+                                            in getattr(cobj, "title", "").lower()
+                                        )
+                                    ):
                                         chat = cobj
                                         break
                                 except Exception:
@@ -228,7 +285,9 @@ async def _run(target_chat_id: Optional[int] = None):
                             )
                             return
                         resolved = chat
-                        print(f"Found chat in dialog cache, using: {chat.title or chat.id}")
+                        print(
+                            f"Found chat in dialog cache, using: {chat.title or chat.id}"
+                        )
 
                 # ---- Backfill ----
                 # Read runtime override options from env (set by CLI wrapper)
@@ -245,7 +304,15 @@ async def _run(target_chat_id: Optional[int] = None):
                 except Exception:
                     thread_id = None
 
-                stats = await backfill_history(client, mongo, chat.id, limit=limit, dry_run=dry_run, resume=resume, thread_id=thread_id)
+                stats = await backfill_history(
+                    client,
+                    mongo,
+                    chat.id,
+                    limit=limit,
+                    dry_run=dry_run,
+                    resume=resume,
+                    thread_id=thread_id,
+                )
 
                 summary = {
                     "target": chat.id,
@@ -260,13 +327,20 @@ async def _run(target_chat_id: Optional[int] = None):
                 # ---- Notify owner ----
                 owner = settings.OWNER_ID
                 bot_token = os.getenv("BOT_TOKEN") or next(
-                    (c.get("bot_token") for c in settings.API_CREDENTIALS if c.get("bot_token")),
+                    (
+                        c.get("bot_token")
+                        for c in settings.API_CREDENTIALS
+                        if c.get("bot_token")
+                    ),
                     None,
                 )
 
                 if owner and bot_token:
                     tg_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-                    payload = {"chat_id": int(owner), "text": f"Backfill finished for {chat.id}: {summary}"}
+                    payload = {
+                        "chat_id": int(owner),
+                        "text": f"Backfill finished for {chat.id}: {summary}",
+                    }
                     async with httpx.AsyncClient() as client_http:
                         try:
                             await client_http.post(tg_url, json=payload, timeout=10)
@@ -281,27 +355,44 @@ async def _run(target_chat_id: Optional[int] = None):
                 diag_secret = os.getenv("DIAG_SECRET")
                 if api_url and diag_secret and not dry_run:
                     try:
-                        invalidate_url = api_url.rstrip("/") + "/_admin/cache/invalidate"
+                        invalidate_url = (
+                            api_url.rstrip("/") + "/_admin/cache/invalidate"
+                        )
                         async with httpx.AsyncClient() as client_http:
-                            await client_http.post(invalidate_url, headers={"X-DIAG-TOKEN": diag_secret}, json={"all": True}, timeout=10)
+                            await client_http.post(
+                                invalidate_url,
+                                headers={"X-DIAG-TOKEN": diag_secret},
+                                json={"all": True},
+                                timeout=10,
+                            )
                     except Exception:
                         pass
         except sqlite3.OperationalError as e:
-            if 'database is locked' in str(e).lower():
-                print("ERROR: SQLite session database is locked. Another process may be using the same Pyrogram session file.")
-                print("Recommendation: stop other processes using the same .session file, or set SESSION_STRING to use an exported session string.")
+            if "database is locked" in str(e).lower():
+                print(
+                    "ERROR: SQLite session database is locked. Another process may be using the same Pyrogram session file."
+                )
+                print(
+                    "Recommendation: stop other processes using the same .session file, or set SESSION_STRING to use an exported session string."
+                )
                 return
             raise
         except struct.error as e:
-            print("ERROR: Failed to read session data — the session file appears corrupt or incompatible.")
+            print(
+                "ERROR: Failed to read session data — the session file appears corrupt or incompatible."
+            )
             project_root = pathlib.Path(__file__).resolve().parents[1]
             session_name = os.getenv("SESSION_NAME") or "backfill_user"
             session_file = project_root / f"{session_name}.session"
             if session_file.exists():
                 print(f"Detected session file: {session_file}")
-                print("Recommendation: backup and remove the session file, then re-run `scripts/create_user_session.py --export` to generate a SESSION_STRING.")
+                print(
+                    "Recommendation: backup and remove the session file, then re-run `scripts/create_user_session.py --export` to generate a SESSION_STRING."
+                )
             else:
-                print("No local session file detected; verify your SESSION_STRING or API_ID/API_HASH.")
+                print(
+                    "No local session file detected; verify your SESSION_STRING or API_ID/API_HASH."
+                )
             traceback.print_exc()
             return
     except Exception as exc:
@@ -320,7 +411,9 @@ async def _run(target_chat_id: Optional[int] = None):
 
         if is_auth_key_issue:
             print("ERROR: Telegram session/auth key is unregistered or invalid.")
-            print("This usually means your session string or .session file is expired, revoked, or incompatible.")
+            print(
+                "This usually means your session string or .session file is expired, revoked, or incompatible."
+            )
             project_root = pathlib.Path(__file__).resolve().parents[1]
             session_name = os.getenv("SESSION_NAME") or "backfill_user"
             session_file = project_root / f"{session_name}.session"
@@ -328,12 +421,18 @@ async def _run(target_chat_id: Optional[int] = None):
                 print(f"Detected local session file: {session_file}")
                 print("Recommendation: backup and remove this .session file, then run:")
                 print("  python scripts/create_user_session.py")
-                print("Follow the prompts to re-login, or run with --export to get SESSION_STRING for remote deployments.")
+                print(
+                    "Follow the prompts to re-login, or run with --export to get SESSION_STRING for remote deployments."
+                )
             else:
-                print("No local .session file detected; if you use SESSION_STRING, ensure it's a fresh exported session.")
+                print(
+                    "No local .session file detected; if you use SESSION_STRING, ensure it's a fresh exported session."
+                )
                 print("To create/export a session string locally, run:")
                 print("  python scripts/create_user_session.py --export")
-                print("Then set SESSION_STRING in your environment and re-run the backfill.")
+                print(
+                    "Then set SESSION_STRING in your environment and re-run the backfill."
+                )
             return
 
         # Unexpected top-level exception; print traceback for debugging.
@@ -341,12 +440,30 @@ async def _run(target_chat_id: Optional[int] = None):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Backfill Telegram chat history into Mongo index")
+    parser = argparse.ArgumentParser(
+        description="Backfill Telegram chat history into Mongo index"
+    )
     parser.add_argument("target", nargs="?", help="Target chat id (optional)")
-    parser.add_argument("--limit", type=int, default=100000, help="Number of messages to fetch from history")
-    parser.add_argument("--dry-run", action="store_true", help="Do not write to DB; run a dry run")
-    parser.add_argument("--no-resume", action="store_true", help="Do not update resume checkpoint (index_state)")
-    parser.add_argument("--thread-id", type=int, default=None, help="Only backfill messages in this topic/thread id (forum topics)")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100000,
+        help="Number of messages to fetch from history",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Do not write to DB; run a dry run"
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Do not update resume checkpoint (index_state)",
+    )
+    parser.add_argument(
+        "--thread-id",
+        type=int,
+        default=None,
+        help="Only backfill messages in this topic/thread id (forum topics)",
+    )
     args = parser.parse_args()
 
     arg_target = None

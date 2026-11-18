@@ -40,17 +40,64 @@ db = client[tele_db]
 coll = db.get_collection("telegraph_pages")
 
 queries = [
-    ("seduction", {"$or":[ {"content": {"$regex": "seduction", "$options":"i"}}, {"page_header":{"$regex":"seduction","$options":"i"}}, {"query":{"$regex":"seduction","$options":"i"}} ]}),
-    ("seduction skills", {"$or":[ {"content": {"$regex": "seduction skills", "$options":"i"}}, {"page_header":{"$regex":"seduction skills","$options":"i"}}, {"query":{"$regex":"seduction skills","$options":"i"}} ]}),
-    ("pdfcoffee", {"$or":[ {"content": {"$regex": "pdfcoffee", "$options":"i"}}, {"page_header":{"$regex":"pdfcoffee","$options":"i"}}, {"query":{"$regex":"pdfcoffee","$options":"i"}} ]}),
-    ("algebra", {"$or":[ {"content": {"$regex": "algebra", "$options":"i"}}, {"page_header":{"$regex":"algebra","$options":"i"}}, {"query":{"$regex":"algebra","$options":"i"}} ]}),
+    (
+        "seduction",
+        {
+            "$or": [
+                {"content": {"$regex": "seduction", "$options": "i"}},
+                {"page_header": {"$regex": "seduction", "$options": "i"}},
+                {"query": {"$regex": "seduction", "$options": "i"}},
+            ]
+        },
+    ),
+    (
+        "seduction skills",
+        {
+            "$or": [
+                {"content": {"$regex": "seduction skills", "$options": "i"}},
+                {"page_header": {"$regex": "seduction skills", "$options": "i"}},
+                {"query": {"$regex": "seduction skills", "$options": "i"}},
+            ]
+        },
+    ),
+    (
+        "pdfcoffee",
+        {
+            "$or": [
+                {"content": {"$regex": "pdfcoffee", "$options": "i"}},
+                {"page_header": {"$regex": "pdfcoffee", "$options": "i"}},
+                {"query": {"$regex": "pdfcoffee", "$options": "i"}},
+            ]
+        },
+    ),
+    (
+        "algebra",
+        {
+            "$or": [
+                {"content": {"$regex": "algebra", "$options": "i"}},
+                {"page_header": {"$regex": "algebra", "$options": "i"}},
+                {"query": {"$regex": "algebra", "$options": "i"}},
+            ]
+        },
+    ),
 ]
 
 # Optional extra search term, read from the environment only (read-only), so no
 # chat id or group name lives in this repo.
 _extra = os.getenv("DIAG_SEARCH_TEXT")
 if _extra:
-    queries.append((f"text_{_extra}", {"$or":[ {"content": {"$regex": _extra, "$options":"i"}}, {"page_header":{"$regex":_extra,"$options":"i"}}, {"query":{"$regex":_extra,"$options":"i"}} ]}))
+    queries.append(
+        (
+            f"text_{_extra}",
+            {
+                "$or": [
+                    {"content": {"$regex": _extra, "$options": "i"}},
+                    {"page_header": {"$regex": _extra, "$options": "i"}},
+                    {"query": {"$regex": _extra, "$options": "i"}},
+                ]
+            },
+        )
+    )
 
 found_any = False
 
@@ -65,26 +112,45 @@ for qname, q in queries:
         print("=== PAGE ID:", _id)
         print(" query:", doc.get("query"))
         print(" page_header:", doc.get("page_header"))
-        print(" group:", doc.get("group"), " part:", doc.get("part_index"), "/", doc.get("total_parts"))
+        print(
+            " group:",
+            doc.get("group"),
+            " part:",
+            doc.get("part_index"),
+            "/",
+            doc.get("total_parts"),
+        )
         content = doc.get("content") or doc.get("markdown") or ""
-        print(" total_results:", doc.get("total_results"), " content_len:", len(content))
-        print(" content_preview:", (content[:300].replace("\n","\\n")))
+        print(
+            " total_results:", doc.get("total_results"), " content_len:", len(content)
+        )
+        print(" content_preview:", (content[:300].replace("\n", "\\n")))
         lr = doc.get("line_refs") or []
         print(" line_refs_count:", len(lr))
         for i, r in enumerate(lr[:20]):
             if not isinstance(r, dict):
                 print("  -", i, "<non-dict ref>", r)
                 continue
-            print("  -", i, r.get("chat_id"), r.get("message_id"), (r.get("filename") or "")[:120], r.get("match_type"), r.get("match_score"))
+            print(
+                "  -",
+                i,
+                r.get("chat_id"),
+                r.get("message_id"),
+                (r.get("filename") or "")[:120],
+                r.get("match_type"),
+                r.get("match_score"),
+            )
         print("")
     if not found:
         print("No telegraph_pages matching", qname, "found in", tele_db)
 
 if not found_any:
-    print("No matching telegraph_pages found for any query (searched: seduction, seduction skills, pdfcoffee, algebra)")
+    print(
+        "No matching telegraph_pages found for any query (searched: seduction, seduction skills, pdfcoffee, algebra)"
+    )
 
 # Check files collection for a few sample message ids mentioned in your snippet
-files_db = client[getattr(settings, "DB_NAME", "tg_index")] 
+files_db = client[getattr(settings, "DB_NAME", "tg_index")]
 files_coll = files_db.get_collection("files")
 sample_ids = [148397, 148303, 148270, 148294, 148985, 151935]
 print("Checking files collection for sample message_ids:", sample_ids)
@@ -94,7 +160,14 @@ for mid in sample_ids:
     except Exception:
         doc = None
     if doc:
-        print("found file for message_id", mid, "chat_id:", doc.get("chat_id"), "filename:", (doc.get("filename") or "")[:140])
+        print(
+            "found file for message_id",
+            mid,
+            "chat_id:",
+            doc.get("chat_id"),
+            "filename:",
+            (doc.get("filename") or "")[:140],
+        )
     else:
         print("no file doc for message_id", mid)
 

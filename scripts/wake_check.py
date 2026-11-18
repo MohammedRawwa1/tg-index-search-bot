@@ -37,9 +37,17 @@ def fetch(url, timeout):
     try:
         # The scheme is validated above; bandit only sees the call.
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read(65536).decode("utf-8", "replace"), time.monotonic() - started
+            return (
+                resp.status,
+                resp.read(65536).decode("utf-8", "replace"),
+                time.monotonic() - started,
+            )
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(65536).decode("utf-8", "replace"), time.monotonic() - started
+        return (
+            exc.code,
+            exc.read(65536).decode("utf-8", "replace"),
+            time.monotonic() - started,
+        )
     except Exception as exc:  # noqa: BLE001 - timeouts and DNS failures are expected here
         return None, f"{type(exc).__name__}: {exc}", time.monotonic() - started
 
@@ -64,7 +72,9 @@ def main() -> int:
     attempts = max(1, int(os.environ.get("WAKE_ATTEMPTS", "3")))
 
     if not token or not base:
-        notice("BOT_TOKEN secret or SERVICE_URL variable is not set for this repository - skipping, nothing was woken.")
+        notice(
+            "BOT_TOKEN secret or SERVICE_URL variable is not set for this repository - skipping, nothing was woken."
+        )
         return 0
 
     status, body, _ = fetch(f"https://api.telegram.org/bot{token}/getWebhookInfo", 20)
@@ -113,10 +123,16 @@ def main() -> int:
 
     recent_error = error_age is not None and error_age < lookback
     if pending <= 0 and not recent_error:
-        notice("Nothing pending and no recent delivery error - not knocking, so the instance stays spun down.")
+        notice(
+            "Nothing pending and no recent delivery error - not knocking, so the instance stays spun down."
+        )
         return 0
 
-    reason = f"{pending} pending update(s)" if pending > 0 else f"delivery failed {int(error_age or 0)}s ago ({last_error})"
+    reason = (
+        f"{pending} pending update(s)"
+        if pending > 0
+        else f"delivery failed {int(error_age or 0)}s ago ({last_error})"
+    )
     print(f"\nknocking on {base}/health/live because of {reason}")
 
     status = None
@@ -124,7 +140,9 @@ def main() -> int:
     elapsed = 0.0
     for attempt in range(1, attempts + 1):
         status, body, elapsed = fetch(base + "/health/live", timeout)
-        print(f"  attempt {attempt}/{attempts}: status={status} in {elapsed:.1f}s body={body[:160]!r}")
+        print(
+            f"  attempt {attempt}/{attempts}: status={status} in {elapsed:.1f}s body={body[:160]!r}"
+        )
         if status == 200:
             notice(f"woke {service_host} in {elapsed:.1f}s ({reason})")
             return 0

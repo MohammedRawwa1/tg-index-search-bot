@@ -6,10 +6,10 @@ from app.services.textnorm import clean_text, normalize_text
 # improved normalization/tokenization rules
 # token patterns: any Unicode letter/digit run, so Arabic, Persian, Cyrillic,
 # Greek, Hebrew and CJK names index instead of collapsing to zero tokens.
-_sep_re = re.compile(r'[\.\-_\[\]\(\)]+')
+_sep_re = re.compile(r"[\.\-_\[\]\(\)]+")
 _space_re = re.compile(r"\s+")
-_camel_re = re.compile(r'(?<!^)(?=[A-Z])')
-_token_re = re.compile(r'[^\W_]+', re.UNICODE)
+_camel_re = re.compile(r"(?<!^)(?=[A-Z])")
+_token_re = re.compile(r"[^\W_]+", re.UNICODE)
 
 # common release/junk tokens to strip (keeps numeric tokens like 1080p)
 # NOTE: media/document file extensions are included so they never pollute

@@ -15,6 +15,7 @@ Keyboard commands while prompted:
 
 import sys
 from pathlib import Path
+
 repo_root = Path(__file__).resolve().parents[1]
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -30,13 +31,24 @@ try:
     from app.services.mongo import MongoService
     from app.services.tokenizer import tokenize_query
     from app.services.search_utils import make_trigrams, trigram_similarity, TRIGRAM_MAX
-    from app.models.file_index_impl import FileIndex, TITLE_WEIGHT, QUALITY_WEIGHT, CODEC_WEIGHT, TRIGRAM_WEIGHT, FILENAME_MATCH
+    from app.models.file_index_impl import (
+        FileIndex,
+        TITLE_WEIGHT,
+        QUALITY_WEIGHT,
+        CODEC_WEIGHT,
+        TRIGRAM_WEIGHT,
+        FILENAME_MATCH,
+    )
 except Exception:
-    print("Failed to import project modules. Ensure you run this script from the project root and have the venv active.")
+    print(
+        "Failed to import project modules. Ensure you run this script from the project root and have the venv active."
+    )
     raise
 
 
-def doc_features(doc: Dict[str, Any], tokens: List[str], q_tris: List[str]) -> Dict[str, float]:
+def doc_features(
+    doc: Dict[str, Any], tokens: List[str], q_tris: List[str]
+) -> Dict[str, float]:
     doc_titles = [t.lower() for t in (doc.get("title_tokens") or [])]
     doc_quality = [t.lower() for t in (doc.get("quality_tokens") or [])]
     doc_codec = [t.lower() for t in (doc.get("codec_tokens") or [])]
@@ -68,7 +80,9 @@ def aggregate_feature_means(items: List[Dict[str, float]]) -> Dict[str, float]:
     return {k: (v / n) for k, v in sums.items()}
 
 
-def suggest_weights(base: Dict[str, float], pos_means: Dict[str, float], neg_means: Dict[str, float]) -> Dict[str, float]:
+def suggest_weights(
+    base: Dict[str, float], pos_means: Dict[str, float], neg_means: Dict[str, float]
+) -> Dict[str, float]:
     # For each feature, compute a safe multiplier = (pos_mean + eps) / (neg_mean + eps)
     eps = 1e-4
     suggestions = {}
@@ -84,10 +98,23 @@ def suggest_weights(base: Dict[str, float], pos_means: Dict[str, float], neg_mea
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive search tuning tool")
-    parser.add_argument("--save", type=str, default=None, help="Save suggestions to a JSON file")
-    parser.add_argument("--per-page", type=int, default=8, help="Results per query display")
-    parser.add_argument("--use-stream", action="store_true", help="Use remote NDJSON streaming endpoint instead of local DB")
-    parser.add_argument("--stream-url", type=str, default=os.getenv("SEARCH_STREAM_URL", "http://127.0.0.1:10000/search/stream"), help="Streaming endpoint URL (NDJSON)")
+    parser.add_argument(
+        "--save", type=str, default=None, help="Save suggestions to a JSON file"
+    )
+    parser.add_argument(
+        "--per-page", type=int, default=8, help="Results per query display"
+    )
+    parser.add_argument(
+        "--use-stream",
+        action="store_true",
+        help="Use remote NDJSON streaming endpoint instead of local DB",
+    )
+    parser.add_argument(
+        "--stream-url",
+        type=str,
+        default=os.getenv("SEARCH_STREAM_URL", "http://127.0.0.1:10000/search/stream"),
+        help="Streaming endpoint URL (NDJSON)",
+    )
     args = parser.parse_args()
 
     MONGO_URI = os.getenv("MONGO_URI")
@@ -99,7 +126,9 @@ def main():
         DB_NAME = DB_NAME or (settings.DB_NAME if settings else None)
 
     # If using remote streaming endpoint, we do not require local Mongo.
-    stream_url = args.stream_url or os.getenv("SEARCH_STREAM_URL", "http://127.0.0.1:10000/search/stream")
+    stream_url = args.stream_url or os.getenv(
+        "SEARCH_STREAM_URL", "http://127.0.0.1:10000/search/stream"
+    )
     if args.use_stream:
         ms = None
         fi = None
@@ -108,11 +137,19 @@ def main():
         if not MONGO_URI:
             print("ERROR: MONGO_URI not configured")
             return 2
-        ms = MongoService(MONGO_URI, DB_NAME, connect_timeout_ms=(settings.MONGO_CONNECT_TIMEOUT_MS if settings else 10000))
+        ms = MongoService(
+            MONGO_URI,
+            DB_NAME,
+            connect_timeout_ms=(
+                settings.MONGO_CONNECT_TIMEOUT_MS if settings else 10000
+            ),
+        )
         ms.connect()
         fi = FileIndex(ms.db)
 
-    print("Interactive tuning: enter queries and mark relevant results. Empty query to finish.")
+    print(
+        "Interactive tuning: enter queries and mark relevant results. Empty query to finish."
+    )
 
     positives = []
     negatives = []
@@ -131,7 +168,9 @@ def main():
             # consume NDJSON stream and collect up to per_page results
             try:
                 params = {"q": q, "per_batch": str(args.per_page)}
-                with httpx.stream("GET", stream_url, params=params, timeout=None) as resp:
+                with httpx.stream(
+                    "GET", stream_url, params=params, timeout=None
+                ) as resp:
                     if resp.status_code != 200:
                         print(f"Stream request failed: {resp.status_code}")
                     else:
@@ -149,7 +188,9 @@ def main():
                 print("Stream error:", exc)
                 rows = []
         else:
-            res = fi.search_with_ranking(tokens=tokens, query=q, page=1, per_page=args.per_page)
+            res = fi.search_with_ranking(
+                tokens=tokens, query=q, page=1, per_page=args.per_page
+            )
             rows = res.get("results", [])
         if not rows:
             print("No results for this query.")
@@ -159,9 +200,13 @@ def main():
             fname = doc.get("filename") or "<no-filename>"
             score = doc.get("_score", 0.0)
             short = fname[:80]
-            print(f" {idx}. {short} | score={score:.3f} chat={doc.get('chat_id')} msg={doc.get('message_id')}")
+            print(
+                f" {idx}. {short} | score={score:.3f} chat={doc.get('chat_id')} msg={doc.get('message_id')}"
+            )
         # prompt for positive indices
-        s = input("Enter space-separated indexes considered relevant (e.g. '1 3') or blank: ").strip()
+        s = input(
+            "Enter space-separated indexes considered relevant (e.g. '1 3') or blank: "
+        ).strip()
         pos_idxs = []
         if s:
             try:
@@ -176,7 +221,9 @@ def main():
             else:
                 negatives.append(feats)
 
-        print(f"Recorded {len(pos_idxs)} positives, {len(rows)-len(pos_idxs)} negatives for this query")
+        print(
+            f"Recorded {len(pos_idxs)} positives, {len(rows) - len(pos_idxs)} negatives for this query"
+        )
 
     # compute aggregate means
     pos_means = aggregate_feature_means(positives)
@@ -208,10 +255,20 @@ def main():
 
     if args.save:
         with open(args.save, "w", encoding="utf-8") as f:
-            json.dump({"base": base, "pos_means": pos_means, "neg_means": neg_means, "suggestions": suggestions}, f, indent=2)
+            json.dump(
+                {
+                    "base": base,
+                    "pos_means": pos_means,
+                    "neg_means": neg_means,
+                    "suggestions": suggestions,
+                },
+                f,
+                indent=2,
+            )
         print(f"Suggestions saved to {args.save}")
 
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

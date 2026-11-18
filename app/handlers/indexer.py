@@ -1,4 +1,5 @@
 """Indexer handlers for live and history indexing."""
+
 import os
 from pyrogram import Client
 from pyrogram.types import Message
@@ -18,13 +19,19 @@ def register_indexer(client: Client, mongo):
     file_index = FileIndex(mongo.db)
     limiter = RateLimiter()
     # Config: allow indexing based on env, default to video-oriented
-    skip_sender_chat = os.getenv("SKIP_SENDER_CHAT", "true").lower() in ("1", "true", "yes")
+    skip_sender_chat = os.getenv("SKIP_SENDER_CHAT", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     @client.on_message()
     async def _on_message(client: Client, message: Message):
         # Skip messages from bots
         try:
-            if getattr(message, "from_user", None) and getattr(message.from_user, "is_bot", False):
+            if getattr(message, "from_user", None) and getattr(
+                message.from_user, "is_bot", False
+            ):
                 return
         except Exception:
             pass
@@ -96,7 +103,9 @@ def register_indexer(client: Client, mongo):
     async def _on_edit(client: Client, message: Message):
         # Skip edits from bots
         try:
-            if getattr(message, "from_user", None) and getattr(message.from_user, "is_bot", False):
+            if getattr(message, "from_user", None) and getattr(
+                message.from_user, "is_bot", False
+            ):
                 return
         except Exception:
             pass
@@ -161,7 +170,15 @@ def register_indexer(client: Client, mongo):
         )
 
 
-async def backfill_history(client: Client, mongo, target_chat_id: int, limit: int = 100000, dry_run: bool = False, resume: bool = True, thread_id: int | None = None):
+async def backfill_history(
+    client: Client,
+    mongo,
+    target_chat_id: int,
+    limit: int = 100000,
+    dry_run: bool = False,
+    resume: bool = True,
+    thread_id: int | None = None,
+):
     """Simple history backfill that yields messages and indexes them.
 
     This is resumable by keeping track of last processed message id in a separate collection.
@@ -199,7 +216,10 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
             try:
                 async for d in client.get_dialogs(limit=1000):
                     try:
-                        if getattr(d.chat, "id", None) == target_chat_id or getattr(d.chat, "id", None) == peer_id:
+                        if (
+                            getattr(d.chat, "id", None) == target_chat_id
+                            or getattr(d.chat, "id", None) == peer_id
+                        ):
                             found = d.chat
                             break
                     except Exception:
@@ -229,7 +249,11 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
 
     # honor SKIP_SENDER_CHAT for backfill selection (defined early to filter during fetch)
     try:
-        skip_sender_chat = os.getenv("SKIP_SENDER_CHAT", "true").lower() in ("1", "true", "yes")
+        skip_sender_chat = os.getenv("SKIP_SENDER_CHAT", "true").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
     except Exception:
         skip_sender_chat = True
 
@@ -337,7 +361,19 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
     # collect identifiers of indexed docs for targeted cache invalidation
     indexed_ids = set()
     # Only index video-like files
-    VIDEO_EXTS = {"mp4", "mkv", "ts", "webm", "mov", "avi", "mpeg", "mpg", "flv", "m4v", "wmv"}
+    VIDEO_EXTS = {
+        "mp4",
+        "mkv",
+        "ts",
+        "webm",
+        "mov",
+        "avi",
+        "mpeg",
+        "mpg",
+        "flv",
+        "m4v",
+        "wmv",
+    }
 
     # Larger batches to speed up indexing; tuned for bulk_write
     BATCH_SIZE = 500
@@ -406,10 +442,14 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
     for msg in reversed(pending):
         stats["scanned"] += 1
         msg_id = getattr(msg, "message_id", getattr(msg, "id", None))
-        chat_id_val = getattr(msg.chat, "id", None) if getattr(msg, "chat", None) else None
+        chat_id_val = (
+            getattr(msg.chat, "id", None) if getattr(msg, "chat", None) else None
+        )
         # Skip messages from bots so we don't index chatbot media
         try:
-            if getattr(msg, "from_user", None) and getattr(msg.from_user, "is_bot", False):
+            if getattr(msg, "from_user", None) and getattr(
+                msg.from_user, "is_bot", False
+            ):
                 stats["skipped_bot"] += 1
                 continue
         except Exception:
@@ -421,7 +461,9 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
                 continue
         except Exception:
             pass
-        media = msg.video if getattr(msg, "video", None) else getattr(msg, "document", None)
+        media = (
+            msg.video if getattr(msg, "video", None) else getattr(msg, "document", None)
+        )
         if not media:
             stats["skipped_no_media"] += 1
             continue
@@ -456,7 +498,9 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
 
         doc = {
             "chat_id": int(chat_id_val) if chat_id_val is not None else None,
-            "message_thread_id": int(msg.message_thread_id) if getattr(msg, "message_thread_id", None) is not None else None,
+            "message_thread_id": int(msg.message_thread_id)
+            if getattr(msg, "message_thread_id", None) is not None
+            else None,
             "message_id": int(msg_id) if msg_id is not None else None,
             "filename": filename,
             "extension": (filename.split(".")[-1] if "." in filename else ""),
@@ -483,6 +527,7 @@ async def backfill_history(client: Client, mongo, target_chat_id: int, limit: in
     await _flush_batch()
 
     from app.utils.logger import logger
+
     logger.info(
         "Backfill complete for {}: scanned={} indexed={} skipped_no_media={} skipped_no_filename={} "
         "skipped_bot={} skipped_sender_chat={} skipped_non_video={}",

@@ -9,7 +9,9 @@ from app.utils.logger import logger
 
 async def _start() -> None:
     # initialize mongo
-    mongo = MongoService(settings.MONGO_URI, settings.DB_NAME, settings.MONGO_CONNECT_TIMEOUT_MS)
+    mongo = MongoService(
+        settings.MONGO_URI, settings.DB_NAME, settings.MONGO_CONNECT_TIMEOUT_MS
+    )
     try:
         mongo.connect()
         mongo.ensure_indexes()
@@ -21,6 +23,7 @@ async def _start() -> None:
     # initialize bot clients (may be multiple)
     try:
         from app.services.session_store import SessionStore
+
         session_store = SessionStore(mongo) if mongo is not None else None
     except Exception:
         session_store = None
@@ -43,6 +46,7 @@ async def _start() -> None:
         # only has a synchronous MongoService.
         try:
             from app.services.internal_pages import InMemoryInternalPageStore
+
             setattr(client, "_internal_page_store", InMemoryInternalPageStore())
         except Exception:
             pass
@@ -51,6 +55,7 @@ async def _start() -> None:
         # admin handlers
         try:
             from app.handlers.admin import register_admin_handlers
+
             register_admin_handlers(client, mongo)
         except Exception:
             pass
@@ -70,7 +75,9 @@ async def _start() -> None:
             try:
                 await client.set_bot_commands(commands)
             except Exception:
-                logger.debug("set_bot_commands skipped for %s", getattr(client, "name", "client"))
+                logger.debug(
+                    "set_bot_commands skipped for %s", getattr(client, "name", "client")
+                )
     except Exception:
         logger.exception("could not publish the command menu")
 

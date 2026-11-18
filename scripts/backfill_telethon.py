@@ -35,9 +35,21 @@ from app.config.settings import settings
 
 
 def _choose_telethon_client():
-    api_id = os.getenv("API_ID") or os.getenv("TELETHON_API_ID") or os.getenv("TELEGRAM_APP_ID")
-    api_hash = os.getenv("API_HASH") or os.getenv("TELETHON_API_HASH") or os.getenv("TELEGRAM_API_HASH")
-    session = os.getenv("TELETHON_SESSION") or os.getenv("SESSION_NAME") or "telethon_backfill"
+    api_id = (
+        os.getenv("API_ID")
+        or os.getenv("TELETHON_API_ID")
+        or os.getenv("TELEGRAM_APP_ID")
+    )
+    api_hash = (
+        os.getenv("API_HASH")
+        or os.getenv("TELETHON_API_HASH")
+        or os.getenv("TELEGRAM_API_HASH")
+    )
+    session = (
+        os.getenv("TELETHON_SESSION")
+        or os.getenv("SESSION_NAME")
+        or "telethon_backfill"
+    )
     if not (api_id and api_hash):
         raise RuntimeError("API_ID and API_HASH must be set in env")
     try:
@@ -47,7 +59,9 @@ def _choose_telethon_client():
     return TelegramClient(str(session), api_id, str(api_hash))
 
 
-async def run_backfill(chat_id: int, thread_id: int | None, limit: int = 20000, dry_run: bool = False):
+async def run_backfill(
+    chat_id: int, thread_id: int | None, limit: int = 20000, dry_run: bool = False
+):
     client = _choose_telethon_client()
 
     mongo = MongoService(settings.MONGO_URI, settings.DB_NAME)
@@ -70,7 +84,19 @@ async def run_backfill(chat_id: int, thread_id: int | None, limit: int = 20000, 
 
     batch = []
     BATCH_SIZE = int(os.getenv("BACKFILL_BATCH_SIZE", "500"))
-    VIDEO_EXTS = {"mp4", "mkv", "ts", "webm", "mov", "avi", "mpeg", "mpg", "flv", "m4v", "wmv"}
+    VIDEO_EXTS = {
+        "mp4",
+        "mkv",
+        "ts",
+        "webm",
+        "mov",
+        "avi",
+        "mpeg",
+        "mpg",
+        "flv",
+        "m4v",
+        "wmv",
+    }
 
     def _extract_filename_from_media(media, msg):
         # common direct attributes
@@ -79,16 +105,24 @@ async def run_backfill(chat_id: int, thread_id: int | None, limit: int = 20000, 
         attrs = getattr(media, "attributes", None) or getattr(media, "attrs", None)
         if not filename and attrs:
             for a in attrs:
-                fname = getattr(a, "file_name", None) or getattr(a, "fileName", None) or getattr(a, "filename", None)
+                fname = (
+                    getattr(a, "file_name", None)
+                    or getattr(a, "fileName", None)
+                    or getattr(a, "filename", None)
+                )
                 if fname:
                     filename = fname
                     break
 
         # try to find a filename-like token in caption/text
         if not filename:
-            caption = getattr(msg, "message", None) or getattr(msg, "text", None) or getattr(msg, "caption", None)
+            caption = (
+                getattr(msg, "message", None)
+                or getattr(msg, "text", None)
+                or getattr(msg, "caption", None)
+            )
             if caption:
-                pattern = r'([\w\-\s\.]+\.(?:' + '|'.join(VIDEO_EXTS) + r'))'
+                pattern = r"([\w\-\s\.]+\.(?:" + "|".join(VIDEO_EXTS) + r"))"
                 m = re.search(pattern, caption, flags=re.IGNORECASE)
                 if m:
                     filename = m.group(1).strip()
@@ -97,14 +131,14 @@ async def run_backfill(chat_id: int, thread_id: int | None, limit: int = 20000, 
         if not filename:
             mime = getattr(media, "mime_type", None) or getattr(media, "mime", None)
             ext = None
-            if mime and '/' in mime:
-                subtype = mime.split('/')[-1].lower()
+            if mime and "/" in mime:
+                subtype = mime.split("/")[-1].lower()
                 if subtype in VIDEO_EXTS:
                     ext = subtype
-                elif subtype == 'x-matroska':
-                    ext = 'mkv'
-                elif subtype == 'quicktime':
-                    ext = 'mov'
+                elif subtype == "x-matroska":
+                    ext = "mkv"
+                elif subtype == "quicktime":
+                    ext = "mov"
             if ext:
                 mid = getattr(msg, "id", getattr(msg, "message_id", None))
                 filename = f"{mid}.{ext}" if mid else f"media.{ext}"
@@ -127,7 +161,9 @@ async def run_backfill(chat_id: int, thread_id: int | None, limit: int = 20000, 
                     try:
                         if getattr(msg, "reply_to_msg_id", None):
                             # telethon exposes reply_to_msg_id but nested object may be present
-                            if getattr(msg, "reply_to", None) and getattr(msg.reply_to, "reply_to_top_id", None):
+                            if getattr(msg, "reply_to", None) and getattr(
+                                msg.reply_to, "reply_to_top_id", None
+                            ):
                                 rt = msg.reply_to.reply_to_top_id
                     except Exception:
                         rt = None
@@ -183,7 +219,9 @@ async def run_backfill(chat_id: int, thread_id: int | None, limit: int = 20000, 
 
                 doc = {
                     "chat_id": int(chat_id),
-                    "message_thread_id": int(thread_id) if thread_id is not None else None,
+                    "message_thread_id": int(thread_id)
+                    if thread_id is not None
+                    else None,
                     "message_id": int(msg.id),
                     "filename": filename,
                     "extension": ext,
@@ -229,7 +267,9 @@ async def run_backfill(chat_id: int, thread_id: int | None, limit: int = 20000, 
 def main():
     parser = argparse.ArgumentParser(description="Telethon backfill for chat/topic")
     parser.add_argument("chat", help="Target chat id or username")
-    parser.add_argument("--thread-id", type=int, default=None, help="Topic/thread id to limit to")
+    parser.add_argument(
+        "--thread-id", type=int, default=None, help="Topic/thread id to limit to"
+    )
     parser.add_argument("--limit", type=int, default=20000)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -245,7 +285,9 @@ def main():
     except Exception:
         chat_id = chat
 
-    asyncio.run(run_backfill(chat_id, thread_id=thread_id, limit=limit, dry_run=dry_run))
+    asyncio.run(
+        run_backfill(chat_id, thread_id=thread_id, limit=limit, dry_run=dry_run)
+    )
 
 
 if __name__ == "__main__":

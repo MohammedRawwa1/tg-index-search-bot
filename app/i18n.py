@@ -27,7 +27,9 @@ SUPPORTED = ("en", "ar")
 
 # Arabic letters (incl. Persian/Urdu additions) vs Latin letters, used only to
 # pick a reply language; matching itself never depends on this.
-_AR_LETTER_RE = re.compile("[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]")
+_AR_LETTER_RE = re.compile(
+    "[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]"
+)
 _LATIN_LETTER_RE = re.compile(r"[A-Za-z]")
 
 MESSAGES: Dict[str, Dict[str, str]] = {
@@ -163,7 +165,9 @@ def resolve_lang(explicit: Optional[str] = None, text: Optional[str] = None) -> 
     return env_lang()
 
 
-def t(key: str, lang: Optional[str] = None, text: Optional[str] = None, **kwargs) -> str:
+def t(
+    key: str, lang: Optional[str] = None, text: Optional[str] = None, **kwargs
+) -> str:
     """Translated message for *key* (English when a translation is missing)."""
     chosen = resolve_lang(lang, text)
     catalog = MESSAGES.get(chosen) or MESSAGES["en"]
@@ -181,11 +185,41 @@ def bilingual(key: str, **kwargs) -> str:
 
 #: Command menu entries as ``(command, description)`` for both languages.
 COMMANDS = [
-    ("search", {"en": "Search indexed files", "ar": "\u0627\u0644\u0628\u062d\u062b \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0645\u0641\u0647\u0631\u0633\u0629"}),
-    ("export", {"en": "Export all results as a file", "ar": "\u062a\u0635\u062f\u064a\u0631 \u0643\u0644 \u0627\u0644\u0646\u062a\u0627\u0626\u062c \u0643\u0645\u0644\u0641"}),
-    ("stats", {"en": "Indexed file counts (owner)", "ar": "\u0639\u062f\u062f \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0645\u0641\u0647\u0631\u0633\u0629 (\u0627\u0644\u0645\u0627\u0644\u0643)"}),
-    ("health", {"en": "Database health (owner)", "ar": "\u062d\u0627\u0644\u0629 \u0642\u0627\u0639\u062f\u0629 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a (\u0627\u0644\u0645\u0627\u0644\u0643)"}),
-    ("reindex", {"en": "Backfill a chat (owner)", "ar": "\u0625\u0639\u0627\u062f\u0629 \u0641\u0647\u0631\u0633\u0629 \u062f\u0631\u062f\u0634\u0629 (\u0627\u0644\u0645\u0627\u0644\u0643)"}),
+    (
+        "search",
+        {
+            "en": "Search indexed files",
+            "ar": "\u0627\u0644\u0628\u062d\u062b \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0645\u0641\u0647\u0631\u0633\u0629",
+        },
+    ),
+    (
+        "export",
+        {
+            "en": "Export all results as a file",
+            "ar": "\u062a\u0635\u062f\u064a\u0631 \u0643\u0644 \u0627\u0644\u0646\u062a\u0627\u0626\u062c \u0643\u0645\u0644\u0641",
+        },
+    ),
+    (
+        "stats",
+        {
+            "en": "Indexed file counts (owner)",
+            "ar": "\u0639\u062f\u062f \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0645\u0641\u0647\u0631\u0633\u0629 (\u0627\u0644\u0645\u0627\u0644\u0643)",
+        },
+    ),
+    (
+        "health",
+        {
+            "en": "Database health (owner)",
+            "ar": "\u062d\u0627\u0644\u0629 \u0642\u0627\u0639\u062f\u0629 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a (\u0627\u0644\u0645\u0627\u0644\u0643)",
+        },
+    ),
+    (
+        "reindex",
+        {
+            "en": "Backfill a chat (owner)",
+            "ar": "\u0625\u0639\u0627\u062f\u0629 \u0641\u0647\u0631\u0633\u0629 \u062f\u0631\u062f\u0634\u0629 (\u0627\u0644\u0645\u0627\u0644\u0643)",
+        },
+    ),
 ]
 
 

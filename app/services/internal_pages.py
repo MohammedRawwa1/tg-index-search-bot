@@ -19,13 +19,27 @@ class InternalPageStore:
     def __init__(self, motor_client):
         self.client = motor_client
 
-    async def save_markdown_page(self, query: str, md_text: str, tokens: list, created_by: Optional[int] = None) -> Dict[str, Any]:
+    async def save_markdown_page(
+        self, query: str, md_text: str, tokens: list, created_by: Optional[int] = None
+    ) -> Dict[str, Any]:
         db_name = getattr(settings, "TELEGRAPH_DB", "course_bot")
         db = self.client[db_name]
         col = db.get_collection("telegraph_pages")
         # Defensive: ensure stored content refers only to video file types.
         # Accept a broad set of extensions and pick lines that reference them.
-        VIDEO_EXTS = (".mp4", ".mkv", ".ts", ".webm", ".mov", ".avi", ".mpeg", ".mpg", ".flv", ".m4v", ".wmv")
+        VIDEO_EXTS = (
+            ".mp4",
+            ".mkv",
+            ".ts",
+            ".webm",
+            ".mov",
+            ".avi",
+            ".mpeg",
+            ".mpg",
+            ".flv",
+            ".m4v",
+            ".wmv",
+        )
         try:
             lines = (md_text or "").splitlines()
             vid_lines = []
@@ -88,13 +102,18 @@ class InternalPageStore:
                 MAX_MSG = getattr(settings, "MAX_MSG", 4000)
                 TELEGRAM_LIMIT = min(int(MAX_MSG), 4096)
                 CHUNK_CHAR_LIMIT = max(800, TELEGRAM_LIMIT - 200)
-                from app.utils.helpers import chunk_lines_by_char_limit, chunk_lines_with_refs
+                from app.utils.helpers import (
+                    chunk_lines_by_char_limit,
+                    chunk_lines_with_refs,
+                )
 
                 lines = (md_text or "").splitlines()
                 # Prefer chunking with refs when provided so we can persist
                 # exact per-line mappings for each saved part.
                 if line_refs:
-                    chunks_with_refs = chunk_lines_with_refs(lines, line_refs, CHUNK_CHAR_LIMIT)
+                    chunks_with_refs = chunk_lines_with_refs(
+                        lines, line_refs, CHUNK_CHAR_LIMIT
+                    )
                     if len(chunks_with_refs) > 1:
                         group_id = str(uuid.uuid4())
                         total_parts_calc = len(chunks_with_refs)
@@ -106,7 +125,9 @@ class InternalPageStore:
                                 "tokens": tokens,
                                 "content": chunk,
                                 "created_at": datetime.utcnow(),
-                                "created_by": int(created_by) if created_by is not None else None,
+                                "created_by": int(created_by)
+                                if created_by is not None
+                                else None,
                                 "meta_tags": tokens,
                                 "group": group_id,
                                 "part_index": int(idx),
@@ -121,7 +142,14 @@ class InternalPageStore:
                                 doc_part["line_refs"] = refs_slice
                             res = await col.insert_one(doc_part)
                             pid = str(res.inserted_id)
-                            logger.info("SAVE PAGE | id={} group={} part={}/{} results={}", pid, group_id, idx, total_parts_calc, total_results_calc)
+                            logger.info(
+                                "SAVE PAGE | id={} group={} part={}/{} results={}",
+                                pid,
+                                group_id,
+                                idx,
+                                total_parts_calc,
+                                total_results_calc,
+                            )
                             if idx == 0:
                                 first_info = {
                                     "page_id": pid,
@@ -148,7 +176,9 @@ class InternalPageStore:
                                 "tokens": tokens,
                                 "content": chunk,
                                 "created_at": datetime.utcnow(),
-                                "created_by": int(created_by) if created_by is not None else None,
+                                "created_by": int(created_by)
+                                if created_by is not None
+                                else None,
                                 "meta_tags": tokens,
                                 "group": group_id,
                                 "part_index": int(idx),
@@ -160,7 +190,14 @@ class InternalPageStore:
                                 doc_part["page_header"] = page_header
                             res = await col.insert_one(doc_part)
                             pid = str(res.inserted_id)
-                            logger.info("SAVE PAGE | id={} group={} part={}/{} results={}", pid, group_id, idx, total_parts_calc, total_results_calc)
+                            logger.info(
+                                "SAVE PAGE | id={} group={} part={}/{} results={}",
+                                pid,
+                                group_id,
+                                idx,
+                                total_parts_calc,
+                                total_results_calc,
+                            )
                             if idx == 0:
                                 first_info = {
                                     "page_id": pid,
@@ -201,7 +238,14 @@ class InternalPageStore:
 
         res = await col.insert_one(doc)
         page_id = str(res.inserted_id)
-        logger.info("SAVE PAGE | id={} group={} part={}/{} results={}", page_id, doc.get("group"), doc.get("part_index"), doc.get("total_parts"), doc.get("total_results"))
+        logger.info(
+            "SAVE PAGE | id={} group={} part={}/{} results={}",
+            page_id,
+            doc.get("group"),
+            doc.get("part_index"),
+            doc.get("total_parts"),
+            doc.get("total_results"),
+        )
         return {
             "page_id": page_id,
             "created_at": doc["created_at"].isoformat(),
@@ -246,17 +290,19 @@ class InternalPageStore:
             cursor = col.find({"group": out["group"]}).sort("part_index", 1)
             group_pages = []
             async for p in cursor:
-                group_pages.append({
-                    "page_id": str(p["_id"]),
-                    "content": p.get("content") or "",
-                    "part_index": int(p.get("part_index") or 0),
-                    "total_parts": int(p.get("total_parts") or 1),
-                    "created_at": p.get("created_at"),
-                    "query": p.get("query") or "",
-                    "total_results": int(p.get("total_results") or 0),
+                group_pages.append(
+                    {
+                        "page_id": str(p["_id"]),
+                        "content": p.get("content") or "",
+                        "part_index": int(p.get("part_index") or 0),
+                        "total_parts": int(p.get("total_parts") or 1),
+                        "created_at": p.get("created_at"),
+                        "query": p.get("query") or "",
+                        "total_results": int(p.get("total_results") or 0),
                         "line_refs": p.get("line_refs") or [],
                         "page_header": p.get("page_header") or "",
-                })
+                    }
+                )
 
             out["group_pages"] = group_pages
 
@@ -324,9 +370,10 @@ class InternalPageStore:
                 return True
             return False
         except Exception as e:
-            logger.exception("set_top_links: failed to set top_links for {}: {}", page_id, e)
+            logger.exception(
+                "set_top_links: failed to set top_links for {}: {}", page_id, e
+            )
             return False
-        
 
 
 class InMemoryInternalPageStore:
@@ -337,7 +384,9 @@ class InMemoryInternalPageStore:
         self.pages: dict = {}
         self.groups: dict = {}
 
-    async def save_markdown_page(self, query: str, md_text: str, tokens: list, created_by: Optional[int] = None) -> Dict[str, Any]:
+    async def save_markdown_page(
+        self, query: str, md_text: str, tokens: list, created_by: Optional[int] = None
+    ) -> Dict[str, Any]:
         pid = str(uuid.uuid4())
         doc = {
             "page_id": pid,
@@ -348,20 +397,42 @@ class InMemoryInternalPageStore:
             "created_by": int(created_by) if created_by is not None else None,
         }
         self.pages[pid] = doc
-        return {"page_id": pid, "created_at": doc["created_at"].isoformat(), "author": doc.get("created_by"), "markdown": doc.get("content")}
+        return {
+            "page_id": pid,
+            "created_at": doc["created_at"].isoformat(),
+            "author": doc.get("created_by"),
+            "markdown": doc.get("content"),
+        }
 
-    async def save_raw_page(self, query: str, md_text: str, tokens: list, created_by: Optional[int] = None, group: str | None = None, part_index: int | None = None, total_parts: int | None = None, total_results: int | None = None, page_header: str | None = None, line_refs: list | None = None) -> Dict[str, Any]:
+    async def save_raw_page(
+        self,
+        query: str,
+        md_text: str,
+        tokens: list,
+        created_by: Optional[int] = None,
+        group: str | None = None,
+        part_index: int | None = None,
+        total_parts: int | None = None,
+        total_results: int | None = None,
+        page_header: str | None = None,
+        line_refs: list | None = None,
+    ) -> Dict[str, Any]:
         # Auto-split oversized content when caller didn't provide explicit parts
         try:
             if group is None and part_index is None and total_parts is None:
                 MAX_MSG = getattr(settings, "MAX_MSG", 4000)
                 TELEGRAM_LIMIT = min(int(MAX_MSG), 4096)
                 CHUNK_CHAR_LIMIT = max(800, TELEGRAM_LIMIT - 200)
-                from app.utils.helpers import chunk_lines_by_char_limit, chunk_lines_with_refs
+                from app.utils.helpers import (
+                    chunk_lines_by_char_limit,
+                    chunk_lines_with_refs,
+                )
 
                 lines = (md_text or "").splitlines()
                 if line_refs:
-                    chunks_with_refs = chunk_lines_with_refs(lines, line_refs, CHUNK_CHAR_LIMIT)
+                    chunks_with_refs = chunk_lines_with_refs(
+                        lines, line_refs, CHUNK_CHAR_LIMIT
+                    )
                     if len(chunks_with_refs) > 1:
                         group_id = str(uuid.uuid4())
                         total_parts_calc = len(chunks_with_refs)
@@ -375,7 +446,9 @@ class InMemoryInternalPageStore:
                                 "content": chunk,
                                 "tokens": tokens,
                                 "created_at": datetime.utcnow(),
-                                "created_by": int(created_by) if created_by is not None else None,
+                                "created_by": int(created_by)
+                                if created_by is not None
+                                else None,
                                 "group": group_id,
                                 "part_index": int(idx),
                                 "total_parts": int(total_parts_calc),
@@ -388,9 +461,25 @@ class InMemoryInternalPageStore:
                                 doc_part["line_refs"] = refs_slice
                             self.pages[pid] = doc_part
                             self.groups.setdefault(group_id, []).append(pid)
-                            logger.info("SAVE PAGE (mem) | id={} group={} part={}/{} results={}", pid, group_id, idx, total_parts_calc, total_results_calc)
+                            logger.info(
+                                "SAVE PAGE (mem) | id={} group={} part={}/{} results={}",
+                                pid,
+                                group_id,
+                                idx,
+                                total_parts_calc,
+                                total_results_calc,
+                            )
                             if idx == 0:
-                                first_info = {"page_id": pid, "created_at": doc_part["created_at"].isoformat(), "author": doc_part.get("created_by"), "markdown": doc_part.get("content"), "group": doc_part.get("group"), "part_index": doc_part.get("part_index"), "total_parts": doc_part.get("total_parts"), "total_results": doc_part.get("total_results")} 
+                                first_info = {
+                                    "page_id": pid,
+                                    "created_at": doc_part["created_at"].isoformat(),
+                                    "author": doc_part.get("created_by"),
+                                    "markdown": doc_part.get("content"),
+                                    "group": doc_part.get("group"),
+                                    "part_index": doc_part.get("part_index"),
+                                    "total_parts": doc_part.get("total_parts"),
+                                    "total_results": doc_part.get("total_results"),
+                                }
                         if first_info:
                             return first_info
                 else:
@@ -408,7 +497,9 @@ class InMemoryInternalPageStore:
                                 "content": chunk,
                                 "tokens": tokens,
                                 "created_at": datetime.utcnow(),
-                                "created_by": int(created_by) if created_by is not None else None,
+                                "created_by": int(created_by)
+                                if created_by is not None
+                                else None,
                                 "group": group_id,
                                 "part_index": int(idx),
                                 "total_parts": int(total_parts_calc),
@@ -419,9 +510,25 @@ class InMemoryInternalPageStore:
                                 doc_part["page_header"] = page_header
                             self.pages[pid] = doc_part
                             self.groups.setdefault(group_id, []).append(pid)
-                            logger.info("SAVE PAGE (mem) | id={} group={} part={}/{} results={}", pid, group_id, idx, total_parts_calc, total_results_calc)
+                            logger.info(
+                                "SAVE PAGE (mem) | id={} group={} part={}/{} results={}",
+                                pid,
+                                group_id,
+                                idx,
+                                total_parts_calc,
+                                total_results_calc,
+                            )
                             if idx == 0:
-                                first_info = {"page_id": pid, "created_at": doc_part["created_at"].isoformat(), "author": doc_part.get("created_by"), "markdown": doc_part.get("content"), "group": doc_part.get("group"), "part_index": doc_part.get("part_index"), "total_parts": doc_part.get("total_parts"), "total_results": doc_part.get("total_results")} 
+                                first_info = {
+                                    "page_id": pid,
+                                    "created_at": doc_part["created_at"].isoformat(),
+                                    "author": doc_part.get("created_by"),
+                                    "markdown": doc_part.get("content"),
+                                    "group": doc_part.get("group"),
+                                    "part_index": doc_part.get("part_index"),
+                                    "total_parts": doc_part.get("total_parts"),
+                                    "total_results": doc_part.get("total_results"),
+                                }
                         if first_info:
                             return first_info
         except Exception:
@@ -448,7 +555,16 @@ class InMemoryInternalPageStore:
         self.pages[pid] = doc
         if group:
             self.groups.setdefault(group, []).append(pid)
-        return {"page_id": pid, "created_at": doc["created_at"].isoformat(), "author": doc.get("created_by"), "markdown": doc.get("content"), "group": doc.get("group"), "part_index": doc.get("part_index"), "total_parts": doc.get("total_parts"), "total_results": doc.get("total_results")}
+        return {
+            "page_id": pid,
+            "created_at": doc["created_at"].isoformat(),
+            "author": doc.get("created_by"),
+            "markdown": doc.get("content"),
+            "group": doc.get("group"),
+            "part_index": doc.get("part_index"),
+            "total_parts": doc.get("total_parts"),
+            "total_results": doc.get("total_results"),
+        }
 
     async def get_page(self, page_id: str) -> Dict[str, Any] | None:
         doc = self.pages.get(page_id)
@@ -461,17 +577,19 @@ class InMemoryInternalPageStore:
             p = self.pages.get(pid)
             if not p:
                 continue
-            group_pages.append({
-                "page_id": p.get("page_id") or pid,
-                "content": p.get("content") or "",
-                "part_index": int(p.get("part_index") or 0),
-                "total_parts": int(p.get("total_parts") or 1),
-                "created_at": p.get("created_at"),
-                "query": p.get("query") or "",
-                "total_results": int(p.get("total_results") or 0),
-                "line_refs": p.get("line_refs") or [],
-                "page_header": p.get("page_header") or "",
-            })
+            group_pages.append(
+                {
+                    "page_id": p.get("page_id") or pid,
+                    "content": p.get("content") or "",
+                    "part_index": int(p.get("part_index") or 0),
+                    "total_parts": int(p.get("total_parts") or 1),
+                    "created_at": p.get("created_at"),
+                    "query": p.get("query") or "",
+                    "total_results": int(p.get("total_results") or 0),
+                    "line_refs": p.get("line_refs") or [],
+                    "page_header": p.get("page_header") or "",
+                }
+            )
 
         out = {
             "page_id": doc.get("page_id"),
@@ -510,4 +628,3 @@ class InMemoryInternalPageStore:
             except Exception:
                 return False
         return False
-        

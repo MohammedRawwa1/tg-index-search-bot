@@ -11,6 +11,7 @@ using existing values or by tokenizing `filename` when missing.
 
 import sys
 from pathlib import Path
+
 repo_root = Path(__file__).resolve().parents[1]
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -37,7 +38,9 @@ except Exception:
     tokenize_filename = None
 
 
-def build_update_for_doc(doc: Dict[str, Any], refresh_tokens: bool = False) -> Dict[str, Any]:
+def build_update_for_doc(
+    doc: Dict[str, Any], refresh_tokens: bool = False
+) -> Dict[str, Any]:
     title_tokens = doc.get("title_tokens") or []
     quality_tokens = doc.get("quality_tokens") or []
     codec_tokens = doc.get("codec_tokens") or []
@@ -103,12 +106,26 @@ def build_update_for_doc(doc: Dict[str, Any], refresh_tokens: bool = False) -> D
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Reindex files collection: recompute search_text & trigrams")
+    parser = argparse.ArgumentParser(
+        description="Reindex files collection: recompute search_text & trigrams"
+    )
     parser.add_argument("--batch-size", type=int, default=500, help="Bulk batch size")
-    parser.add_argument("--dry-run", action="store_true", help="Don't write; just preview updates")
-    parser.add_argument("--limit", type=int, default=0, help="Limit documents processed (0 = all)")
-    parser.add_argument("--skip-trigrams", action="store_true", help="Skip docs that already have trigrams (ignored with --refresh-tokens)")
-    parser.add_argument("--refresh-tokens", action="store_true", help="Re-tokenize every doc from its stored filename (no Telegram backfill needed)")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Don't write; just preview updates"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=0, help="Limit documents processed (0 = all)"
+    )
+    parser.add_argument(
+        "--skip-trigrams",
+        action="store_true",
+        help="Skip docs that already have trigrams (ignored with --refresh-tokens)",
+    )
+    parser.add_argument(
+        "--refresh-tokens",
+        action="store_true",
+        help="Re-tokenize every doc from its stored filename (no Telegram backfill needed)",
+    )
 
     args = parser.parse_args()
 
@@ -126,7 +143,11 @@ def main():
         print("ERROR: MONGO_URI not set in env and could not import settings.")
         return 2
 
-    ms = MongoService(MONGO_URI, DB_NAME, connect_timeout_ms=(settings.MONGO_CONNECT_TIMEOUT_MS if settings else 10000))
+    ms = MongoService(
+        MONGO_URI,
+        DB_NAME,
+        connect_timeout_ms=(settings.MONGO_CONNECT_TIMEOUT_MS if settings else 10000),
+    )
     print(f"Connecting to Mongo: {MONGO_URI} (db={DB_NAME})")
     ms.connect()
     print("Connected; ensuring indexes...")
@@ -158,31 +179,38 @@ def main():
             continue
         upd = build_update_for_doc(doc, refresh_tokens=args.refresh_tokens)
         if args.dry_run:
-            print(f"[DRY] _id={doc.get('_id')} -> search_text_len={len(upd.get('search_text',''))} trigrams={len(upd.get('trigrams',[]))}")
+            print(
+                f"[DRY] _id={doc.get('_id')} -> search_text_len={len(upd.get('search_text', ''))} trigrams={len(upd.get('trigrams', []))}"
+            )
         else:
-            bulk_ops.append(UpdateOne({"_id": doc.get("_id")}, {"$set": upd}, upsert=False))
+            bulk_ops.append(
+                UpdateOne({"_id": doc.get("_id")}, {"$set": upd}, upsert=False)
+            )
         if not args.dry_run and len(bulk_ops) >= args.batch_size:
             try:
                 res = col.bulk_write(bulk_ops, ordered=False)
-                updated += (res.modified_count + res.upserted_count)
+                updated += res.modified_count + res.upserted_count
             except Exception as exc:
                 print("Bulk write failed:", exc)
             bulk_ops = []
         if processed % 500 == 0:
             elapsed = time.time() - start
-            print(f"Processed {processed}/{total_docs} docs, updated {updated}, elapsed {elapsed:.1f}s")
+            print(
+                f"Processed {processed}/{total_docs} docs, updated {updated}, elapsed {elapsed:.1f}s"
+            )
 
     # flush remaining
     if not args.dry_run and bulk_ops:
         try:
             res = col.bulk_write(bulk_ops, ordered=False)
-            updated += (res.modified_count + res.upserted_count)
+            updated += res.modified_count + res.upserted_count
         except Exception as exc:
             print("Final bulk write failed:", exc)
 
     elapsed = time.time() - start
     print(f"Done. Processed={processed} Updated={updated} Elapsed={elapsed:.1f}s")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

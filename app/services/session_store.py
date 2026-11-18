@@ -46,7 +46,9 @@ class SessionStore:
     def _encrypt(self, plaintext: str) -> str:
         if not self._key:
             # store as plain base64 for dev convenience (NOT recommended)
-            return "PLAIN:" + base64.b64encode(plaintext.encode("utf-8")).decode("ascii")
+            return "PLAIN:" + base64.b64encode(plaintext.encode("utf-8")).decode(
+                "ascii"
+            )
         aes = AESGCM(self._key)
         nonce = secrets.token_bytes(12)
         ct = aes.encrypt(nonce, plaintext.encode("utf-8"), None)
@@ -56,7 +58,9 @@ class SessionStore:
         if blob.startswith("PLAIN:"):
             return base64.b64decode(blob.split(":", 1)[1]).decode("utf-8")
         if not self._key:
-            raise RuntimeError("Encryption key not configured; cannot decrypt stored sessions")
+            raise RuntimeError(
+                "Encryption key not configured; cannot decrypt stored sessions"
+            )
         raw = base64.b64decode(blob)
         nonce = raw[:12]
         ct = raw[12:]
@@ -103,7 +107,9 @@ class SessionStore:
         s = self._decrypt(enc)
         # update last used timestamp
         try:
-            self.col.update_one({"session_key": session_key}, {"$set": {"last_used": datetime.utcnow()}})
+            self.col.update_one(
+                {"session_key": session_key}, {"$set": {"last_used": datetime.utcnow()}}
+            )
         except Exception:
             pass
         return s

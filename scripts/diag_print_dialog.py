@@ -1,15 +1,22 @@
 import asyncio, pathlib, sys, os, traceback
+
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path: sys.path.insert(0, str(_ROOT))
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from pyrogram import Client
+
 
 async def main():
     # Target id and title come from the environment only (read-only); neither is
     # stored in this repo. Read them before creating the client so a run with
     # nothing configured never touches Telegram.
     raw_target = os.getenv("DIAG_TARGET_CHAT_ID")
-    target = int(raw_target) if raw_target and raw_target.lstrip("-").isdigit() else raw_target
+    target = (
+        int(raw_target)
+        if raw_target and raw_target.lstrip("-").isdigit()
+        else raw_target
+    )
     target_title = os.getenv("DIAG_TARGET_TITLE") or None
     if target is None and not target_title:
         print("Set DIAG_TARGET_CHAT_ID and/or DIAG_TARGET_TITLE; nothing to look for.")
@@ -50,8 +57,13 @@ async def main():
             if (target is not None and chat.id == target) or (
                 target_title and getattr(chat, "title", None) == target_title
             ):
-                print("FOUND", chat.id, getattr(chat,'title',None), getattr(chat,'username',None))
-                print("dir(chat):", [x for x in dir(chat) if not x.startswith('_')])
+                print(
+                    "FOUND",
+                    chat.id,
+                    getattr(chat, "title", None),
+                    getattr(chat, "username", None),
+                )
+                print("dir(chat):", [x for x in dir(chat) if not x.startswith("_")])
                 try:
                     print("chat.__dict__:", chat.__dict__)
                 except Exception as e:
@@ -71,26 +83,50 @@ async def main():
                         print("resolve_peer error:", type(re), re)
 
                     from pyrogram.raw import functions, types
+
                     aid = getattr(chat, "id", None)
                     ahash = getattr(chat, "access_hash", None)
                     print("access_hash attribute:", ahash)
                     if ahash:
-                        input_channel = types.InputChannel(channel_id=abs(aid), access_hash=ahash)
+                        input_channel = types.InputChannel(
+                            channel_id=abs(aid), access_hash=ahash
+                        )
                         try:
-                            full = await client.invoke(functions.channels.GetFullChannel(channel=input_channel))
+                            full = await client.invoke(
+                                functions.channels.GetFullChannel(channel=input_channel)
+                            )
                             print("GetFullChannel success:", full)
                         except Exception as e:
                             print("GetFullChannel error:", type(e), e)
                     else:
-                        print("No access_hash on chat; trying raw messages.GetDialogs() to inspect raw chat objects")
+                        print(
+                            "No access_hash on chat; trying raw messages.GetDialogs() to inspect raw chat objects"
+                        )
                         try:
-                            res = await client.invoke(functions.messages.GetDialogs(offset_date=0, offset_id=0, offset_peer=types.InputPeerEmpty(), limit=10, hash=0))
-                            print("messages.GetDialogs result chats length:", len(res.chats))
+                            res = await client.invoke(
+                                functions.messages.GetDialogs(
+                                    offset_date=0,
+                                    offset_id=0,
+                                    offset_peer=types.InputPeerEmpty(),
+                                    limit=10,
+                                    hash=0,
+                                )
+                            )
+                            print(
+                                "messages.GetDialogs result chats length:",
+                                len(res.chats),
+                            )
                             for ch in res.chats:
                                 try:
-                                    cid = getattr(ch,'id',None)
-                                    ctitle = getattr(ch,'title',None)
-                                    print("raw chat:", type(ch), cid, ctitle, getattr(ch,'access_hash',None))
+                                    cid = getattr(ch, "id", None)
+                                    ctitle = getattr(ch, "title", None)
+                                    print(
+                                        "raw chat:",
+                                        type(ch),
+                                        cid,
+                                        ctitle,
+                                        getattr(ch, "access_hash", None),
+                                    )
                                 except Exception as e:
                                     print("raw chat print error:", e)
                         except Exception as e:
@@ -103,5 +139,6 @@ async def main():
             print("Dialog not found in get_dialogs()")
     finally:
         await client.stop()
+
 
 asyncio.run(main())

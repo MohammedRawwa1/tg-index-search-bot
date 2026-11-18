@@ -8,6 +8,7 @@ Usage:
   python scripts/delete_dups_by_norm.py --delete --yes
   python scripts/delete_dups_by_norm.py --delete --yes --limit 10000
 """
+
 import argparse
 import sys
 import pathlib
@@ -25,8 +26,18 @@ from datetime import datetime
 
 # ✅ MEDIA ONLY (edit if you want stricter filtering like only .mp4)
 MEDIA_EXTENSIONS = {
-    ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
-    ".mp3", ".wav", ".aac", ".ogg", ".m4a"
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".mov",
+    ".wmv",
+    ".flv",
+    ".webm",
+    ".mp3",
+    ".wav",
+    ".aac",
+    ".ogg",
+    ".m4a",
 }
 
 
@@ -38,11 +49,27 @@ def is_media_file(filename: str) -> bool:
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Delete duplicate MEDIA file docs by normalized filename")
-    p.add_argument("--preview", type=int, default=0, help="Show up to N sample duplicate groups (no deletes)")
+    p = argparse.ArgumentParser(
+        description="Delete duplicate MEDIA file docs by normalized filename"
+    )
+    p.add_argument(
+        "--preview",
+        type=int,
+        default=0,
+        help="Show up to N sample duplicate groups (no deletes)",
+    )
     p.add_argument("--delete", action="store_true", help="Perform deletion")
-    p.add_argument("--yes", action="store_true", help="Skip interactive confirmation when --delete is used")
-    p.add_argument("--limit", type=int, default=0, help="Limit number of MEDIA documents to process (0=all)")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip interactive confirmation when --delete is used",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit number of MEDIA documents to process (0=all)",
+    )
     return p.parse_args()
 
 
@@ -67,7 +94,9 @@ def main():
     coll = mongo.db.get_collection("files")
     fi = FileIndex(mongo.db)
 
-    print("Scanning MEDIA documents to compute normalized filename and find duplicates...")
+    print(
+        "Scanning MEDIA documents to compute normalized filename and find duplicates..."
+    )
 
     projection = {
         "_id": 1,
@@ -76,14 +105,13 @@ def main():
         "norm_filename": 1,
         "title_tokens": 1,
         "message_id": 1,
-        "timestamp": 1
+        "timestamp": 1,
     }
 
     # ✅ Mongo-side filtering for performance
     media_regex = r"\.(mp4|mkv|avi|mov|wmv|flv|webm|mp3|wav|aac|ogg|m4a)$"
     cursor = coll.find(
-        {"filename": {"$regex": media_regex, "$options": "i"}},
-        projection=projection
+        {"filename": {"$regex": media_regex, "$options": "i"}}, projection=projection
     )
 
     groups = {}
@@ -140,15 +168,20 @@ def main():
             print(f"chat_id={chat_id} norm='{norm}' group_size={len(docs)}")
             for dd in sorted(
                 docs,
-                key=lambda x: (to_timestamp_val(x.get("timestamp")), int(x.get("message_id") or 0)),
-                reverse=True
+                key=lambda x: (
+                    to_timestamp_val(x.get("timestamp")),
+                    int(x.get("message_id") or 0),
+                ),
+                reverse=True,
             ):
-                print({
-                    "_id": str(dd.get("_id")),
-                    "message_id": dd.get("message_id"),
-                    "filename": dd.get("filename"),
-                    "timestamp": dd.get("timestamp")
-                })
+                print(
+                    {
+                        "_id": str(dd.get("_id")),
+                        "message_id": dd.get("message_id"),
+                        "filename": dd.get("filename"),
+                        "timestamp": dd.get("timestamp"),
+                    }
+                )
             i += 1
 
     if not args.delete:
@@ -167,12 +200,14 @@ def main():
     for (chat_id, norm), docs in groups.items():
         for d in docs:
             if (d.get("norm_filename") or "") != norm:
-                updates.append(UpdateOne({"_id": d.get("_id")}, {"$set": {"norm_filename": norm}}))
+                updates.append(
+                    UpdateOne({"_id": d.get("_id")}, {"$set": {"norm_filename": norm}})
+                )
 
     try:
         BATCH = 1000
         for i in range(0, len(updates), BATCH):
-            coll.bulk_write(updates[i:i + BATCH], ordered=False)
+            coll.bulk_write(updates[i : i + BATCH], ordered=False)
         print(f"Patched {len(updates)} documents")
     except Exception as e:
         print("Bulk update failed:", e)
@@ -184,8 +219,11 @@ def main():
     for docs in dup_groups.values():
         sorted_docs = sorted(
             docs,
-            key=lambda x: (to_timestamp_val(x.get("timestamp")), int(x.get("message_id") or 0)),
-            reverse=True
+            key=lambda x: (
+                to_timestamp_val(x.get("timestamp")),
+                int(x.get("message_id") or 0),
+            ),
+            reverse=True,
         )
         to_delete_ids.extend([d["_id"] for d in sorted_docs[1:]])
 
@@ -193,7 +231,7 @@ def main():
     if to_delete_ids:
         BATCH = 1000
         for i in range(0, len(to_delete_ids), BATCH):
-            res = coll.delete_many({"_id": {"$in": to_delete_ids[i:i + BATCH]}})
+            res = coll.delete_many({"_id": {"$in": to_delete_ids[i : i + BATCH]}})
             deleted_count += int(res.deleted_count or 0)
 
     print(f"Deleted {deleted_count} documents")
@@ -202,10 +240,11 @@ def main():
     print("Running background normalization...")
     try:
         import subprocess
+
         subprocess.Popen(
             [sys.executable, "scripts/compute_norm_filenames.py", "--apply"],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
         )
         print("Normalization started in background")
     except Exception as e:

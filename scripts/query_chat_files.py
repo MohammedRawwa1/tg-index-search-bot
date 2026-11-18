@@ -19,14 +19,21 @@ CHAT_ID = int(os.getenv("QUERY_CHAT_ID", "0") or 0)
 
 def main():
     if not CHAT_ID:
-        print("QUERY_CHAT_ID is not set to a chat id (for example QUERY_CHAT_ID=-1001234567890); nothing to query.")
+        print(
+            "QUERY_CHAT_ID is not set to a chat id (for example QUERY_CHAT_ID=-1001234567890); nothing to query."
+        )
         return
     uri = settings.MONGO_URI
     db_name = settings.DB_NAME
     try:
         ca = None
         u = uri.lower()
-        if u.startswith("mongodb+srv://") or "mongodb.net" in u or "tls=true" in u or "ssl=true" in u:
+        if (
+            u.startswith("mongodb+srv://")
+            or "mongodb.net" in u
+            or "tls=true" in u
+            or "ssl=true" in u
+        ):
             ca = certifi.where()
         if ca:
             client = MongoClient(uri, tls=True, tlsCAFile=ca)
@@ -51,8 +58,10 @@ def main():
         print("index_state:", json.dumps(last, default=str, indent=2))
     except Exception as exc:
         print("ERROR querying Mongo:", exc)
-        import traceback; traceback.print_exc()
+        import traceback
 
-if __name__ == '__main__':
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
     main()
-

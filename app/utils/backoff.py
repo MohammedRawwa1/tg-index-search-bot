@@ -3,7 +3,16 @@ import random
 from typing import Callable, Any
 
 
-async def retry_async(func: Callable[..., Any], *args, retries: int = 3, base: float = 0.5, max_backoff: float = 8.0, jitter: float = 0.2, retry_exceptions: tuple = (Exception,), **kwargs):
+async def retry_async(
+    func: Callable[..., Any],
+    *args,
+    retries: int = 3,
+    base: float = 0.5,
+    max_backoff: float = 8.0,
+    jitter: float = 0.2,
+    retry_exceptions: tuple = (Exception,),
+    **kwargs,
+):
     """Run `func(*args, **kwargs)` with exponential backoff on failure.
 
     `func` must be an awaitable/coroutine function.
