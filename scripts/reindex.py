@@ -28,6 +28,7 @@ try:
     from app.services.mongo import MongoService
     from app.services.search_utils import make_trigrams, TRIGRAM_MAX
     from app.services.tokenizer import tokenize_filename
+    from app.services.textnorm import normalize_text
 except Exception:
     # best-effort imports; fall back to env vars below
     settings = None
@@ -36,6 +37,25 @@ except Exception:
     make_trigrams = None
     TRIGRAM_MAX = 300
     tokenize_filename = None
+    normalize_text = None
+
+
+def _norm_from_filename(filename: str) -> str:
+    """Normalize a filename the way FileIndex._normalize_filename does.
+
+    Drops the extension, then case-folds and folds word separators / Arabic
+    variants. A bare ``lower()`` kept separators, punctuation and the
+    extension, so the same file could end up with two different dedupe keys.
+    """
+    s = str(filename or "")
+    if "." in s:
+        s = s.rsplit(".", 1)[0]
+    if normalize_text is None:
+        return s.lower()
+    try:
+        return normalize_text(s)
+    except Exception:
+        return s.lower()
 
 
 def build_update_for_doc(
@@ -70,7 +90,11 @@ def build_update_for_doc(
         if title_tokens:
             norm_filename = " ".join([str(t).lower() for t in title_tokens if t])
         else:
-            norm_filename = doc.get("norm_filename") or str(filename).lower()
+            # normalized words, not a bare lower(): strip the extension and
+            # treat separators/punctuation/script variants as separators.
+            norm_filename = _norm_from_filename(filename) or doc.get(
+                "norm_filename"
+            )
     except Exception:
         norm_filename = doc.get("norm_filename") or ""
     title_phrase = norm_filename

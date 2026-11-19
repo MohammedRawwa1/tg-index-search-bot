@@ -29,13 +29,20 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+# Ensure the project root is importable when the script is run directly
+# (`python scripts/local_indexer.py`): sys.path[0] is scripts/, not the root.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from app.services.search_utils import make_trigrams
 from app.services.textnorm import clean_text, normalize_text
 
 # --- Tokenizer (adapted from tg-index project notes) ---------------------------------
 _sep_re = re.compile(r"[\.#\-_\[\]\(\)]+")
 _space_re = re.compile(r"\s+")
-_camel_re = re.compile(r"(?<!^)(?=[A-Z])")
+# real camelCase/PascalCase boundaries only (see app/services/tokenizer.py)
+_camel_re = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 _release_junk = set(
     [
@@ -74,6 +81,38 @@ _release_junk = set(
         "720p",
         "1080p",
         "2160p",
+        # extensions: keep them out of the title tokens (and therefore out of the
+        # dedupe key) exactly like app/services/tokenizer.py does
+        "mkv",
+        "mp4",
+        "avi",
+        "mov",
+        "flv",
+        "wmv",
+        "m4v",
+        "mpeg",
+        "mpg",
+        "webm",
+        "3gp",
+        "m2ts",
+        "iso",
+        "epub",
+        "pdf",
+        "mobi",
+        "azw3",
+        "azw",
+        "azw4",
+        "djvu",
+        "fb2",
+        "rtf",
+        "pdb",
+        "docx",
+        "srt",
+        "sub",
+        "flac",
+        "ogg",
+        "opus",
+        "apk",
     ]
 )
 
@@ -141,6 +180,41 @@ def tokenize_query(query: str) -> List[str]:
     q = _sep_re.sub(" ", query)
     q = " ".join(_split_camel(q))
     return [t for t in normalize_text(q).split() if t]
+
+
+def _norm_from_filename(filename: str) -> str:
+    """Strip the extension and normalize: lowercase words, Arabic folding."""
+    s = str(filename or "")
+    if "." in s:
+        s = s.rsplit(".", 1)[0]
+    return normalize_text(s)
+
+
+def norm_filename_for(filename: str, token_struct: Optional[Dict[str, Any]] = None) -> str:
+    """Dedupe key for a file, same rule as the bot's FileIndex.upsert_file.
+
+    Title tokens come first because they already drop the extension and release
+    junk, so "Movie.mp4" and "Movie.mp4.mp4" collapse to the same key; otherwise
+    fall back to the normalized filename.
+    """
+    tokens = [
+        str(t).lower() for t in ((token_struct or {}).get("title_tokens") or []) if t
+    ]
+    if tokens:
+        return " ".join(tokens)
+    return _norm_from_filename(filename)
+
+
+def doc_norm_key(doc: Dict[str, Any]) -> str:
+    """Dedupe key for an index entry, computed for indexes without the field."""
+    key = doc.get("norm_filename")
+    if not key:
+        key = norm_filename_for(doc.get("filename") or "", doc)
+    key = str(key or "").strip().lower()
+    if key:
+        return key
+    # nothing nameable: keep such entries separate instead of collapsing them
+    return f"id:{doc.get('id') or doc.get('path') or ''}"
 
 
 # --- FFprobe / FFmpeg helpers --------------------------------------------------------
@@ -281,6 +355,7 @@ def scan_directory(
             "quality_tokens": token_struct.get("quality_tokens", []),
             "codec_tokens": token_struct.get("codec_tokens", []),
             "year": token_struct.get("year"),
+            "norm_filename": norm_filename_for(fname, token_struct),
             "thumbnail": str(thumb_path.resolve()) if thumb_path.exists() else None,
             "trigrams": make_trigrams(fname),
         }
@@ -340,6 +415,14 @@ def search_index(
                 results.append(doc)
 
     results.sort(key=lambda r: (r.get("_score", 0), r.get("mtime", 0)), reverse=True)
+
+    # collapse duplicates by the same key the bot dedupes on, keeping the
+    # best-scoring copy (list is already sorted, so the first one wins)
+    unique: Dict[str, Dict[str, Any]] = {}
+    for r in results:
+        unique.setdefault(doc_norm_key(r), r)
+    results = list(unique.values())
+
     total = len(results)
     start = (page - 1) * per_page
     end = start + per_page
@@ -384,7 +467,16 @@ def export_markdown(
         res = search_index(index_path, query, page=1, per_page=per_page)
         docs = res.get("results", [])
     else:
-        docs = idx.get("files", [])
+        docs = sorted(
+            idx.get("files", []),
+            key=lambda d: (int(d.get("mtime") or 0),),
+            reverse=True,
+        )
+        # collapse duplicates the same way a search does (newest wins)
+        unique: Dict[str, Dict[str, Any]] = {}
+        for d in docs:
+            unique.setdefault(doc_norm_key(d), d)
+        docs = list(unique.values())
     lines: List[str] = []
     for doc in docs:
         title_tokens = doc.get("title_tokens") or []

@@ -116,6 +116,7 @@ def main():
 
     groups = {}
     processed = 0
+    skipped_no_chat = 0
 
     for d in cursor:
         if args.limit and processed >= args.limit:
@@ -130,17 +131,26 @@ def main():
         processed += 1
 
         chat_id = d.get("chat_id")
+        if chat_id is None:
+            # cannot group across chats safely; leave such docs untouched
+            skipped_no_chat += 1
+            continue
 
-        # compute normalized filename
+        # canonical key, same rule as FileIndex.upsert_file: title tokens first
+        # (they already drop extensions/release junk), then the filename
+        # normalizer, and only then a stored norm_filename (legacy docs).
+        # Trusting the stored value first grouped on stale keys left behind by
+        # older tokenizers and then wrote them back.
         try:
-            if d.get("norm_filename"):
-                norm = (d.get("norm_filename") or "").strip()
-            elif d.get("title_tokens"):
-                norm = " ".join([t.lower() for t in d.get("title_tokens") if t])
+            tokens = [t for t in (d.get("title_tokens") or []) if t]
+            if tokens:
+                norm = " ".join(str(t).lower() for t in tokens)
             else:
-                norm = fi._normalize_filename(filename)
+                norm = fi._normalize_filename(filename) or (
+                    d.get("norm_filename") or ""
+                ).strip()
         except Exception:
-            norm = fi._normalize_filename(filename)
+            norm = (d.get("norm_filename") or "").strip()
 
         if not norm:
             continue
@@ -154,6 +164,8 @@ def main():
     total_to_delete = sum(len(v) - 1 for v in dup_groups.values())
 
     print(f"Processed MEDIA documents: {processed}")
+    if skipped_no_chat:
+        print(f"Skipped documents without chat_id: {skipped_no_chat}")
     print(f"Duplicate groups found: {total_groups}")
     print(f"Total docs in duplicate groups: {total_docs}")
     print(f"Estimated docs to delete: {total_to_delete}")
@@ -238,17 +250,21 @@ def main():
 
     # ✅ Step 3: normalize remaining
     print("Running background normalization...")
-    try:
-        import subprocess
+    norm_script = pathlib.Path(__file__).resolve().parent / "compute_norm_filenames.py"
+    if not norm_script.exists():
+        print(f"Skipped normalization: {norm_script.name} is not in scripts/.")
+    else:
+        try:
+            import subprocess
 
-        subprocess.Popen(
-            [sys.executable, "scripts/compute_norm_filenames.py", "--apply"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        print("Normalization started in background")
-    except Exception as e:
-        print("Failed to start normalization:", e)
+            subprocess.Popen(
+                [sys.executable, str(norm_script), "--apply"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            print("Normalization started in background")
+        except Exception as e:
+            print("Failed to start normalization:", e)
 
     print("Done.")
     print(f"Processed: {processed}")

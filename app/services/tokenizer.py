@@ -8,7 +8,12 @@ from app.services.textnorm import clean_text, normalize_text
 # Greek, Hebrew and CJK names index instead of collapsing to zero tokens.
 _sep_re = re.compile(r"[\.\-_\[\]\(\)]+")
 _space_re = re.compile(r"\s+")
-_camel_re = re.compile(r"(?<!^)(?=[A-Z])")
+# Split only real camelCase/PascalCase boundaries: a lowercase or digit run
+# followed by a capital ("chickMagnet" -> "chick Magnet") or an acronym
+# followed by a capitalized word ("HTTPServer" -> "HTTP Server"). Splitting
+# before every capital shredded all-caps names into single letters, so the
+# query "CHICK" became c h i c k and matched unrelated files.
+_camel_re = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _token_re = re.compile(r"[^\W_]+", re.UNICODE)
 
 # common release/junk tokens to strip (keeps numeric tokens like 1080p)
