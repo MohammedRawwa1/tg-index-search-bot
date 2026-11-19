@@ -186,6 +186,20 @@ def bilingual(key: str, **kwargs) -> str:
 #: Command menu entries as ``(command, description)`` for both languages.
 COMMANDS = [
     (
+        "start",
+        {
+            "en": "Welcome & quick start",
+            "ar": "الترحيب والبدء السريع",
+        },
+    ),
+    (
+        "help",
+        {
+            "en": "All commands",
+            "ar": "كل الأوامر",
+        },
+    ),
+    (
         "search",
         {
             "en": "Search indexed files",
@@ -218,6 +232,20 @@ COMMANDS = [
         {
             "en": "Backfill a chat (owner)",
             "ar": "\u0625\u0639\u0627\u062f\u0629 \u0641\u0647\u0631\u0633\u0629 \u062f\u0631\u062f\u0634\u0629 (\u0627\u0644\u0645\u0627\u0644\u0643)",
+        },
+    ),
+    (
+        "admin",
+        {
+            "en": "Admin panel (owner)",
+            "ar": "لوحة الإدارة (المالك)",
+        },
+    ),
+    (
+        "clear_all",
+        {
+            "en": "Clear all indexed files (owner)",
+            "ar": "مسح جميع الملفات المفهرسة (المالك)",
         },
     ),
 ]

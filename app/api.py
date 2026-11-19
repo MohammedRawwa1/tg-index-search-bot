@@ -1523,8 +1523,8 @@ async def _telegram_webhook_inner(token: str, update: dict):
     # normalize command without botname suffix
     cmd = text.split(maxsplit=1)[0].split("@", 1)[0]
     if cmd == "/start":
-        # Bilingual: a mixed audience reads the same screen.
-        await _send_tg(token, chat_id, bilingual("start"))
+        # English only: /start is the one screen that stays untranslated.
+        await _send_tg(token, chat_id, t("start", "en"))
         return {"ok": True}
 
     if cmd == "/help":
