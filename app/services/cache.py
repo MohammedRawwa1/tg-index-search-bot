@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 from app.config.settings import settings
 
+# Search semantics changes must bypass persisted results from earlier versions.
+_CACHE_KEY_VERSION = "search-normalization-v2"
+
 
 class AsyncSearchCache:
     """Lightweight async in-memory LRU cache with optional Mongo persistence.
@@ -43,7 +46,10 @@ class AsyncSearchCache:
         thread_id: Optional[int] = None,
         allow_broad: bool = False,
     ) -> str:
-        s = f"q={query}|p={page}|r={per_page}|s={int(bool(strict))}|t={thread_id or ''}|b={int(bool(allow_broad))}"
+        s = (
+            f"v={_CACHE_KEY_VERSION}|q={query}|p={page}|r={per_page}|"
+            f"s={int(bool(strict))}|t={thread_id or ''}|b={int(bool(allow_broad))}"
+        )
         return hashlib.sha256(s.encode("utf-8", errors="ignore")).hexdigest()
 
     async def ensure_indexes(self):
