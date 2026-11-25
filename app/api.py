@@ -5685,10 +5685,12 @@ async def search_stream(
     per_batch: int = Query(200, ge=1, le=2000),
     thread_id: int | None = Query(None),
 ):
-    """Stream all matching results for a query as NDJSON using Atlas Search when available.
+    """Stream every matching result for a query as NDJSON (Atlas when available).
 
-    This endpoint streams result documents in score-desc order. Use a reasonably
-    small `per_batch` to control memory.
+    Documents are ranked first and then streamed in score-desc order, so memory
+    scales with the match count, not with `per_batch`; `per_batch` only sets the
+    database/response batch size. There is no row cap: a query matching 20,000
+    documents streams 20,000 lines.
     """
     db = getattr(app.state, "db", None)
     if db is None:
@@ -5805,8 +5807,33 @@ async def search_stream(
     ]
     if thread_id is not None:
         try:
-            tid = int(thread_id)
-            pipeline.append({"$match": {"message_thread_id": tid}})
+            await coll.aggregate(_stream_pipeline(_stage) + [{"$limit": 1}]).to_list(
+                length=1
+            )
+            cursor = coll.aggregate(
+                _stream_pipeline(_stage), allowDiskUse=True, batchSize=per_batch
+            )
+            break
+        except Exception as _exc:
+            if _idx == 0 and len(stages) > 1:
+                if _atlas_prefix_rejected(_exc):
+                    _ATLAS_PREFIX_STATE["enabled"] = False
+                logger.warning(
+                    "search_stream: Atlas prefix stage failed ({}); retrying text-only",
+                    _exc,
+                )
+                continue
+            logger.exception(
+                "search_stream: atlas aggregation failed, falling back to legacy"
+            )
+            break
+
+    docs = []
+    if cursor is not None:
+        # Read the whole pipeline output. The old length=5000 cap cut the stream
+        # off mid-result-set and the caller had no way to tell.
+        try:
+            docs = [doc async for doc in cursor]
         except Exception:
             pass
 
@@ -5852,24 +5879,6 @@ async def search_stream(
                 except Exception:
                     pass
 
-            cursor2 = (
-                coll.find(candidate_filter, proj_fields)
-                .sort([("timestamp", -1)])
-                .batch_size(per_batch)
-            )
-
-            async def gen2():
-                async for doc in cursor2:
-                    try:
-                        if "_id" in doc:
-                            doc["_id"] = str(doc["_id"])
-                        ts = doc.get("timestamp")
-                        if isinstance(ts, datetime):
-                            doc["timestamp"] = ts.isoformat()
-                    except Exception:
-                        pass
-                    yield json.dumps(doc, default=str) + "\n"
-
-            return StreamingResponse(gen2(), media_type="application/x-ndjson")
+            docs = [doc async for doc in coll.find(candidate_filter, proj_fields)]
         except Exception:
             raise HTTPException(status_code=500, detail="Search streaming failed")
