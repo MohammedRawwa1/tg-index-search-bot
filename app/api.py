@@ -30,6 +30,7 @@ from app.services.relevance import (
     resolve_min_tier,
     tier_priority,
 )
+from app.services.morphology import fold, variant_patterns
 import sys
 import httpx
 import html
@@ -1736,7 +1737,9 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
         pass
 
     try:
-        res = await api_search(q=query, page=1, per_page=50)
+        res = await api_search(
+            q=query, page=1, per_page=50, strict=False, allow_broad=False
+        )
     except Exception as exc:
         logger.exception("background search failed: {}", exc)
         res = None
@@ -2226,7 +2229,13 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
                     # so the single-message GUI is used for all result sizes.
                     if store:
                         try:
-                            full_res = await api_search(q=query, page=1, per_page=5000)
+                            full_res = await api_search(
+                                q=query,
+                                page=1,
+                                per_page=5000,
+                                strict=False,
+                                allow_broad=False,
+                            )
                             full_results = (
                                 full_res.get("results", [])
                                 if isinstance(full_res, dict)
@@ -4827,6 +4836,27 @@ async def admin_cache_stats(request: Request, token: str | None = None):
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
+def _result_dedupe_key(doc: dict) -> str:
+    """Key that merges copies of one file into a single result row.
+
+    Same rule as `FileIndex.upsert_file`: the stored normalized title phrase,
+    else the title tokens, else the row's own chat/message id. A document with
+    no nameable key stays its own row instead of collapsing unrelated files.
+    """
+    try:
+        norm = doc.get("norm_filename")
+        if not norm:
+            toks = [str(t).lower() for t in (doc.get("title_tokens") or []) if t]
+            if toks:
+                norm = " ".join(toks)
+        norm = str(norm or "").strip().lower()
+        if norm:
+            return norm
+    except Exception:
+        pass
+    return f"{doc.get('chat_id')}:{doc.get('message_id')}"
+
+
 @app.get("/search")
 async def api_search(
     q: str = Query(..., min_length=1, max_length=128),
@@ -4891,7 +4921,16 @@ async def api_search(
         "codec": 1,
         "thumbnail": 1,
         "path": 1,
+        # dedupe key: lets identical copies collapse into one result row
+        "norm_filename": 1,
     }
+    # Word-form variants of the query tokens: "create" must also pull in
+    # "created"/"creating"/"creation" candidates, not only the exact spelling.
+    token_forms = list(tokens)
+    for _token in tokens:
+        _folded = fold(_token)
+        if _folded and _folded not in token_forms:
+            token_forms.append(_folded)
     # Candidate selection: prefer Atlas Search aggregation when available.
     from app.services.search_utils import make_trigrams, trigram_similarity, TRIGRAM_MAX
 
@@ -4996,6 +5035,19 @@ async def api_search(
                     }
                 }
             )
+            # word-form variants: an OR of the folded spellings, so the
+            # other grammatical forms still surface as candidates
+            if token_forms:
+                should.append(
+                    {
+                        "text": {
+                            "query": " ".join(token_forms),
+                            "path": "title_tokens",
+                            "score": {"boost": {"value": max(1.0, w_title * 0.5)}},
+                        }
+                    }
+                )
+
             # typo tier: fuzzy only on the aggregated search_text, low boost
             fuzzy_clause = {
                 "text": {
@@ -5037,13 +5089,13 @@ async def api_search(
             proj_fields["score"] = 1
             pipeline.append({"$project": proj_fields})
 
-            # sorting + pagination
+            # sort only: copies are merged and paged in Python below, so a
+            # page-sized window here would return fewer rows than requested
             pipeline.append({"$sort": {"score": -1, "timestamp": -1}})
-            if start:
-                pipeline.append({"$skip": start})
-            pipeline.append({"$limit": per_page})
+            atlas_window = max(int(per_page) * 4, 200)
+            pipeline.append({"$limit": atlas_window})
 
-            docs = await coll.aggregate(pipeline).to_list(length=per_page)
+            docs = await coll.aggregate(pipeline).to_list(length=atlas_window)
 
             # count total matches (separate, may be expensive)
             try:
@@ -5135,10 +5187,11 @@ async def api_search(
             except Exception:
                 pass
 
-            if not candidates:
+            # any token, including the folded word-form variant
+            if len(candidates) < 200:
                 try:
-                    if tokens:
-                        q_any = {"title_tokens": {"$in": tokens}}
+                    if token_forms:
+                        q_any = {"title_tokens": {"$in": token_forms}}
                         if thread_id is not None:
                             try:
                                 q_any = {
@@ -5155,6 +5208,42 @@ async def api_search(
                             .to_list(length=2000)
                         )
                         _add(res_any)
+                except Exception:
+                    pass
+
+            # word-form candidates: "^creat" also finds "created", "creating"
+            # and "creation" when the exact spelling is not what was indexed
+            if len(candidates) < 200 and token_forms:
+                try:
+                    var_filter = {
+                        "$or": [
+                            {
+                                "title_tokens": {
+                                    "$elemMatch": {
+                                        "$regex": pattern,
+                                        "$options": "i",
+                                    }
+                                }
+                            }
+                            for pattern in variant_patterns(token_forms)
+                        ]
+                    }
+                    if thread_id is not None:
+                        try:
+                            var_filter = {
+                                "$and": [
+                                    var_filter,
+                                    {"message_thread_id": int(thread_id)},
+                                ]
+                            }
+                        except Exception:
+                            pass
+                    res_var = (
+                        await coll.find(var_filter, projection)
+                        .sort(sort_order)
+                        .to_list(length=1000)
+                    )
+                    _add(res_var)
                 except Exception:
                     pass
 
@@ -5244,20 +5333,19 @@ async def api_search(
         ),
         reverse=True,
     )
-    # If we computed `total` earlier (Atlas count), prefer it; otherwise derive from results
-    total = total if isinstance(total, int) and total > 0 else len(results)
-    # When using Atlas Search the pipeline already applied skip/limit; preserve results as-is.
-    try:
-        use_atlas
-    except NameError:
-        use_atlas = False
+    # Collapse copies of one file — the same title posted in several messages,
+    # or the same file as ".mp4" and ".mp4.mp4" — into a SINGLE row, so the
+    # reply is one merged list. `results` is score-ordered, so the first hit
+    # kept for a key is already the best one.
+    merged = {}
+    for doc in results:
+        merged.setdefault(_result_dedupe_key(doc), doc)
+    results = list(merged.values())
+    total = len(results)
 
-    if use_atlas:
-        page_results = results
-    else:
-        start = (page - 1) * per_page
-        end = start + per_page
-        page_results = results[start:end]
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_results = results[start:end]
 
     log_search_quality(
         q,
