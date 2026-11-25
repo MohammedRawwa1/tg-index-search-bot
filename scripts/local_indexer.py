@@ -29,12 +29,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 # Ensure the project root is importable when the script is run directly
 # (`python scripts/local_indexer.py`): sys.path[0] is scripts/, not the root.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from app.services.morphology import related as _token_related
 from app.services.search_utils import make_trigrams
 from app.services.textnorm import clean_text, normalize_text
 
@@ -190,7 +192,9 @@ def _norm_from_filename(filename: str) -> str:
     return normalize_text(s)
 
 
-def norm_filename_for(filename: str, token_struct: Optional[Dict[str, Any]] = None) -> str:
+def norm_filename_for(
+    filename: str, token_struct: Optional[Dict[str, Any]] = None
+) -> str:
     """Dedupe key for a file, same rule as the bot's FileIndex.upsert_file.
 
     Title tokens come first because they already drop the extension and release
@@ -379,7 +383,9 @@ def search_index(
     for doc in docs:
         score = 0.0
         doc_titles = [t.lower() for t in doc.get("title_tokens", [])]
-        matched = sum(1 for t in tokens if t.lower() in doc_titles)
+        matched = sum(
+            1 for t in tokens if any(_token_related(t, d) for d in doc_titles)
+        )
         score += matched * 10
         for qt in doc.get("quality_tokens", []):
             if qt and any(qt == t.lower() for t in tokens):
@@ -403,7 +409,12 @@ def search_index(
             score = 0.0
             doc_titles = [t.lower() for t in doc.get("title_tokens", [])]
             matched = sum(
-                1 for t in tokens if any(tt.startswith(t.lower()) for tt in doc_titles)
+                1
+                for t in tokens
+                if any(
+                    tt.startswith(t.lower()) or _token_related(t, tt)
+                    for tt in doc_titles
+                )
             )
             score += matched * 8
             if qlower and qlower in doc.get("filename", "").lower():

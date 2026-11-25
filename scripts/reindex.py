@@ -92,9 +92,7 @@ def build_update_for_doc(
         else:
             # normalized words, not a bare lower(): strip the extension and
             # treat separators/punctuation/script variants as separators.
-            norm_filename = _norm_from_filename(filename) or doc.get(
-                "norm_filename"
-            )
+            norm_filename = _norm_from_filename(filename) or doc.get("norm_filename")
     except Exception:
         norm_filename = doc.get("norm_filename") or ""
     title_phrase = norm_filename

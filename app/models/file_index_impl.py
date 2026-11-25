@@ -3,6 +3,7 @@ from datetime import datetime
 import re
 import os
 import asyncio
+from app.services.morphology import fold, variant_patterns
 from app.services.search_utils import make_trigrams, TRIGRAM_MAX
 from app.services.textnorm import normalize_text
 from app.services.relevance import (
@@ -237,17 +238,14 @@ class FileIndex:
     def _prefix_fallback(
         self, tokens: List[str], limit: int = 50
     ) -> List[Dict[str, Any]]:
-        # fallback using prefix regex on title tokens or filename
-        regexes = []
-        for t in tokens:
-            regexes.append(re.compile(rf"^{re.escape(t)}", re.IGNORECASE))
-        # build $or query: any title_tokens matches regex OR filename contains prefix
+        # fallback using prefix regex on title tokens or filename, covering each
+        # token's word-form variants (create/created/creating, re+install)
         or_clauses = []
-        for r in regexes:
+        for pattern in variant_patterns(tokens):
             or_clauses.append(
-                {"title_tokens": {"$elemMatch": {"$regex": r.pattern, "$options": "i"}}}
+                {"title_tokens": {"$elemMatch": {"$regex": pattern, "$options": "i"}}}
             )
-            or_clauses.append({"filename": {"$regex": r.pattern, "$options": "i"}})
+            or_clauses.append({"filename": {"$regex": pattern, "$options": "i"}})
         cursor = self._coll.find({"$or": or_clauses}).limit(limit)
         return list(cursor)
 
@@ -360,17 +358,29 @@ class FileIndex:
                 1 for d in classified if accepts_tier(d.get("_tier", NONE_TIER), tier)
             )
 
-        # Stage 1 — exact token candidates (title/quality/codec hits)
+        # Stage 1 — exact token candidates (title/quality/codec hits) plus the
+        # word-form variants of every token, so "create" also pulls in
+        # "created"/"creating"/"creation" entries instead of only the exact form
         try:
-            candidate_filter = _with_filters(
-                {
-                    "$or": [
-                        {"title_tokens": {"$in": tokens}},
-                        {"quality_tokens": {"$in": tokens}},
-                        {"codec_tokens": {"$in": tokens}},
-                    ]
-                }
-            )
+            token_forms = list(tokens)
+            for t in tokens:
+                form = fold(t)
+                if form and form not in token_forms:
+                    token_forms.append(form)
+            stage1_clauses = [
+                {"title_tokens": {"$in": token_forms}},
+                {"quality_tokens": {"$in": token_forms}},
+                {"codec_tokens": {"$in": token_forms}},
+            ]
+            for pattern in variant_patterns(tokens):
+                stage1_clauses.append(
+                    {
+                        "title_tokens": {
+                            "$elemMatch": {"$regex": pattern, "$options": "i"}
+                        }
+                    }
+                )
+            candidate_filter = _with_filters({"$or": stage1_clauses})
             _classify(self._coll.find(candidate_filter).limit(self.CANDIDATE_LIMIT))
         except Exception:
             pass
@@ -379,19 +389,19 @@ class FileIndex:
         if not strict and _count_at("prefix") < MIN_RESULTS:
             try:
                 or_clauses = []
-                for t in tokens:
+                for pattern in variant_patterns(tokens):
                     or_clauses.append(
                         {
                             "title_tokens": {
                                 "$elemMatch": {
-                                    "$regex": f"^{re.escape(t)}",
+                                    "$regex": pattern,
                                     "$options": "i",
                                 }
                             }
                         }
                     )
                     or_clauses.append(
-                        {"filename": {"$regex": f"^{re.escape(t)}", "$options": "i"}}
+                        {"filename": {"$regex": pattern, "$options": "i"}}
                     )
                 _classify(
                     self._coll.find(_with_filters({"$or": or_clauses})).limit(

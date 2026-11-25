@@ -146,9 +146,10 @@ def main():
             if tokens:
                 norm = " ".join(str(t).lower() for t in tokens)
             else:
-                norm = fi._normalize_filename(filename) or (
-                    d.get("norm_filename") or ""
-                ).strip()
+                norm = (
+                    fi._normalize_filename(filename)
+                    or (d.get("norm_filename") or "").strip()
+                )
         except Exception:
             norm = (d.get("norm_filename") or "").strip()
 

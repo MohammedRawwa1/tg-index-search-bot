@@ -32,6 +32,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from app.services.morphology import fold as _fold, matched_tokens as _matched_tokens
 from app.services.search_utils import make_trigrams, trigram_similarity, TRIGRAM_MAX
 from app.services.textnorm import normalize_text as _normalize_text
 from app.utils.logger import logger
@@ -121,13 +122,18 @@ def tokenize_norm(text: Optional[str]) -> List[str]:
 
 
 def is_contiguous_phrase(q_tokens: Sequence[str], doc_tokens: Sequence[str]) -> bool:
-    """True when `q_tokens` appear consecutively (in order) inside `doc_tokens`."""
+    """True when `q_tokens` appear consecutively (in order) inside `doc_tokens`.
+
+    Compared with word-form folding, so "playing games" matches the title
+    tokens "play game" and the other way round.
+    """
     if len(q_tokens) < 2 or len(q_tokens) > len(doc_tokens):
         return False
-    q_len = len(q_tokens)
-    q_list = list(q_tokens)
-    for i in range(len(doc_tokens) - q_len + 1):
-        if doc_tokens[i : i + q_len] == q_list:
+    q_forms = [_fold(t) for t in q_tokens]
+    doc_forms = [_fold(t) for t in doc_tokens]
+    q_len = len(q_forms)
+    for i in range(len(doc_forms) - q_len + 1):
+        if doc_forms[i : i + q_len] == q_forms:
             return True
     return False
 
@@ -209,7 +215,9 @@ def classify_match(
     aux_set = set(str(t).lower() for t in (doc.get("quality_tokens") or []))
     aux_set |= set(str(t).lower() for t in (doc.get("codec_tokens") or []))
 
-    matched = len(q_set & (title_set | aux_set))
+    # exact tokens first, then the same word in another grammatical form, so
+    # "create" also matches "created", "creating", "creates" and "creation"
+    matched = len(_matched_tokens(q_set, title_set | aux_set))
     coverage = matched / float(len(q_set)) if q_set else 0.0
 
     # --- exact: normalized filename / title equals (or is a full prefix of)
@@ -261,8 +269,15 @@ def classify_match(
     #     the filename starts with the full normalized query ---
     prefix_hit = False
     for qt in q_set:
+        qt_form = _fold(qt)
         for dt in doc_titles:
-            if dt.startswith(qt) or qt.startswith(dt):
+            dt_form = _fold(dt)
+            if (
+                dt.startswith(qt)
+                or qt.startswith(dt)
+                or dt_form.startswith(qt_form)
+                or qt_form.startswith(dt_form)
+            ):
                 prefix_hit = True
                 break
         if prefix_hit:
