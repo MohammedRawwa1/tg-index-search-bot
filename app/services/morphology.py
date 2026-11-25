@@ -85,6 +85,36 @@ _NO_S_STRIP = ("ss", "us", "is", "os", "as")
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
+def _variant_spellings(token: str) -> set[str]:
+    """Return exact spellings that fold to the same canonical token."""
+    stem = fold(token)
+    roots = {stem}
+    if stem and stem[-1] not in _VOWELS and stem[-1] not in _NO_UNDOUBLE:
+        roots.add(stem + stem[-1])
+
+    spellings = {token, stem}
+    for root in roots:
+        spellings.add(root + "e")
+        if root.endswith("i"):
+            spellings.update((root[:-1] + "y", root[:-1] + "ies", root[:-1] + "ied"))
+        for suffix, replacement in _REPLACEMENTS:
+            if replacement:
+                if root.endswith(replacement):
+                    spellings.add(root[: -len(replacement)] + suffix)
+            else:
+                spellings.add(root + suffix)
+    # Keep only candidates that the canonicalizer confirms as equivalent.
+    stem_spellings = {
+        spelling for spelling in spellings if spelling and fold(spelling) == stem
+    }
+    for spelling in tuple(stem_spellings):
+        for prefix in _PREFIXES:
+            candidate = prefix + spelling
+            if fold(candidate) == stem:
+                stem_spellings.add(candidate)
+    return stem_spellings
+
+
 def _fold_once(word: str) -> str:
     """Strip one suffix (or turn -ies/-ied into -i)."""
     if len(word) >= 5 and word.endswith(("ies", "ied")):
@@ -157,26 +187,17 @@ def matched_tokens(query_tokens: Iterable[str], doc_tokens: Iterable[str]) -> Se
     return {q for q in queries if q in docs or fold(q) in doc_forms}
 
 
-_PREFIX_GROUP = f"(?:{'|'.join(sorted(_PREFIXES, key=len, reverse=True))})?"
-
-
 def variant_patterns(tokens: Iterable[str]) -> List[str]:
-    """Anchored regexes covering a token and its word-form variants.
-
-    Used by the Mongo candidate queries: `^creat` finds "create", "created",
-    "creating" and "creation", and the optional prefix group also finds
-    "reinstall"/"unlimited"-style derivations. Candidates are still ranked by
-    classify_match, so the extra recall never lowers precision by itself.
-    """
+    """Anchored regexes for exact tokens and recognized word-form variants."""
     patterns: List[str] = []
     for token in tokens or []:
         token = str(token or "").strip().lower()
         if not token:
             continue
-        stem = fold(token)
-        if stem and stem != token:
-            patterns.append("^" + _PREFIX_GROUP + re.escape(stem))
-        patterns.append("^" + _PREFIX_GROUP + re.escape(token))
+        spellings = "|".join(
+            re.escape(spelling) for spelling in sorted(_variant_spellings(token))
+        )
+        patterns.append("^(?:" + spellings + ")$")
 
     seen = set()
     unique: List[str] = []
