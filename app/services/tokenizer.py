@@ -15,6 +15,7 @@ _space_re = re.compile(r"\s+")
 # query "CHICK" became c h i c k and matched unrelated files.
 _camel_re = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _token_re = re.compile(r"[^\W_]+", re.UNICODE)
+_unsplit_compounds = {"sextasy", "sextonic"}
 
 # common release/junk tokens to strip (keeps numeric tokens like 1080p)
 # NOTE: media/document file extensions are included so they never pollute
@@ -96,8 +97,12 @@ _release_junk = set(
 
 
 def _split_camel(s: str) -> List[str]:
-    # split camelCase and PascalCase
-    parts = _camel_re.sub(" ", s).split()
+    parts = []
+    for token in s.split():
+        if token.casefold() in _unsplit_compounds:
+            parts.append(token)
+        else:
+            parts.extend(_camel_re.sub(" ", token).split())
     return parts
 
 
