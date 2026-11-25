@@ -31,7 +31,9 @@ services:
       # RENDER_EXTERNAL_URL, which Render keeps in sync with the service. A
       # manually pinned URL goes stale and makes the bot silently deaf.
       - key: "DB_NAME"
-        value: "tg_index"
+        # Must be the database the files are actually indexed into (course_bot,
+        # same as the .env). tg_index was the legacy default and is not it.
+        value: "course_bot"
       - key: "LOG_LEVEL"
         value: "INFO"
       - key: "BACKFILL_AUTO"

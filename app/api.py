@@ -1753,6 +1753,27 @@ async def _process_search_and_send(token: str, chat_id: int, query: str) -> None
     else:
         results = res.get("results", [])
         total = res.get("total", 0)
+        # api_search pages at 50 rows, so a query with more hits rendered a
+        # "N results - part 1/2" header while only the first 50 rows were ever
+        # listed (hits 51..N silently vanished). Pull the full set with the same
+        # per_page the internal-page builder uses and let the chunker split it.
+        try:
+            if total and total > len(results):
+                full_res = await api_search(
+                    q=query,
+                    page=1,
+                    per_page=5000,
+                    strict=False,
+                    allow_broad=False,
+                )
+                if isinstance(full_res, dict) and full_res.get("results"):
+                    results = full_res["results"]
+                    total = full_res.get("total") or len(results)
+        except Exception:
+            logger.exception(
+                "_process_search_and_send: full result fetch failed for query={}",
+                query,
+            )
         if not results:
             reply_text = t(
                 "results_none_for", query=_escape_markdown(query), text=query
@@ -3836,7 +3857,20 @@ async def health():
             raise Exception("MongoDB not configured")
         await mongo_client.admin.command("ping")
         files = await db.get_collection("files").estimated_document_count()
-        return {"ok": True, "files": files}
+        # Report the database and cluster this deployment reads, so a service
+        # pointed at the wrong Mongo (wrong DB_NAME or a URI copied from the
+        # other bot) is visible here instead of only as bad search results.
+        # Credentials are stripped by parsing the host out of the URI.
+        cluster = None
+        try:
+            cluster = urllib.parse.urlsplit(
+                settings.MONGO_URI.replace("mongodb+srv://", "https://").replace(
+                    "mongodb://", "http://"
+                )
+            ).hostname
+        except Exception:
+            cluster = None
+        return {"ok": True, "files": files, "db": db.name, "cluster": cluster}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 

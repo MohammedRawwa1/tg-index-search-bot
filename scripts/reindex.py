@@ -129,6 +129,21 @@ def build_update_for_doc(
     return update
 
 
+def _redact_uri(uri: str) -> str:
+    """Drop the password before a connection string reaches a terminal/log."""
+    try:
+        if "://" not in uri:
+            return uri
+        scheme, rest = uri.split("://", 1)
+        if "@" not in rest:
+            return uri
+        creds, host = rest.rsplit("@", 1)
+        user = creds.split(":", 1)[0]
+        return f"{scheme}://{user}:***@{host}"
+    except Exception:
+        return "<mongo uri>"
+
+
 def _coerce_id(raw):
     """Accept a 24-hex ObjectId (or any scalar _id) from --start-after."""
     if raw is None:
@@ -167,6 +182,11 @@ def main():
         default=None,
         help="Resume: skip docs up to and including this _id (printed by a previous run)",
     )
+    parser.add_argument(
+        "--db",
+        default=None,
+        help="Database name override (default: DB_NAME env var, then settings)",
+    )
 
     args = parser.parse_args()
 
@@ -180,6 +200,9 @@ def main():
             MONGO_URI = MONGO_URI or settings.MONGO_URI
             DB_NAME = DB_NAME or settings.DB_NAME
 
+    if args.db:
+        DB_NAME = args.db
+
     if not MONGO_URI:
         print("ERROR: MONGO_URI not set in env and could not import settings.")
         return 2
@@ -189,7 +212,7 @@ def main():
         DB_NAME,
         connect_timeout_ms=(settings.MONGO_CONNECT_TIMEOUT_MS if settings else 10000),
     )
-    print(f"Connecting to Mongo: {MONGO_URI} (db={DB_NAME})")
+    print(f"Connecting to Mongo: {_redact_uri(MONGO_URI)} (db={DB_NAME})")
     ms.connect()
     print("Connected; ensuring indexes...")
     try:
@@ -205,6 +228,28 @@ def main():
     if args.limit and args.limit > 0:
         total_docs = min(total_docs, args.limit)
     fetch_size = max(args.batch_size, 200)
+
+    if total_docs == 0 and start_after is None:
+        # A zero-doc run almost always means the wrong database: DB_NAME from the
+        # shell can point somewhere other than the DB the deployed bot writes to.
+        print(f"No documents in {ms.db.name}.files -- check DB_NAME or pass --db.")
+        try:
+            for name in sorted(ms.client.list_database_names()):
+                if name in ("admin", "local", "config"):
+                    continue
+                try:
+                    n = (
+                        ms.client[name]
+                        .get_collection("files")
+                        .estimated_document_count()
+                    )
+                except Exception:
+                    continue
+                if n:
+                    print(f"  {name}.files -> {n} docs")
+            print("Re-run with --db <name-of-the-database-that-has-your-files>")
+        except Exception as exc:
+            print(f"  (could not list databases: {exc})")
 
     # MongoDB closes cursors that stay idle for ~10 minutes, and a getMore that
     # fails mid-flight (Atlas network blip / retryable-read failover) kills the
