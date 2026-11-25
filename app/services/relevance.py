@@ -35,6 +35,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from app.services.morphology import fold as _fold, matched_tokens as _matched_tokens
 from app.services.search_utils import make_trigrams, trigram_similarity, TRIGRAM_MAX
 from app.services.textnorm import normalize_text as _normalize_text
+from app.services.tokenizer import tokenize_filename
 from app.utils.logger import logger
 
 # ---------------------------------------------------------------------------
@@ -168,6 +169,11 @@ def tier_priority(tier: Optional[str]) -> float:
 
 
 def _doc_title_tokens(doc: Dict[str, Any]) -> List[str]:
+    filename = doc.get("filename")
+    if isinstance(filename, str) and filename:
+        tokens = tokenize_filename(filename).get("title_tokens") or []
+        return [str(t).lower() for t in tokens if t]
+
     tt = doc.get("title_tokens") or []
     return [str(t).lower() for t in tt if t]
 
