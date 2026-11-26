@@ -757,6 +757,10 @@ def render_paginated_page(
         settings = None
 
     page_query = page.get("query") or query_override or ""
+    if page_query == "__forced__":
+        # Legacy pages saved before the real header/total were attached; the
+        # sentinel must never be shown to a reader.
+        page_query = ""
     content_raw = page.get("content") or ""
     # Build both a Markdown-safe body (for attempts with parse_mode)
     # and a plain-text version used for fallbacks. We prefer sending
@@ -859,18 +863,26 @@ def render_paginated_page(
         if page.get("total_results") is not None
         else (len(gp) * max_links)
     )
-    header = (
-        t("results_header", query=page_query, total=page_total, lang=lang) + "\n\n"
-        if page_query
-        else ""
-    )
+    # Prefer the header the page was created with (already carries the exact
+    # total, e.g. "Search: reading — 1065 results — part 2/22"); only build one from
+    # the query/total metadata when the page has none.
+    header_text = (page.get("page_header") or "").strip()
+    if not header_text:
+        for _gp in gp or []:
+            if isinstance(_gp, dict):
+                header_text = (_gp.get("page_header") or "").strip()
+                if header_text:
+                    break
+    if not header_text and page_query:
+        header_text = t("results_header", query=page_query, total=page_total, lang=lang)
+
+    header = header_text + "\n\n" if header_text else ""
 
     # Build full Markdown body (do not truncate here; callers decide how to split)
     md_header = (
-        "*"
-        + t("results_header", query=page_query, total=page_total, lang=lang)
-        + "*\n\n"
-        if page_query
+        (header_text if header_text.startswith(("*", "_")) else "*" + header_text + "*")
+        + "\n\n"
+        if header_text
         else ""
     )
     # Prefer Markdown-safe content when available

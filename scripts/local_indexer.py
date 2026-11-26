@@ -36,7 +36,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from app.services.morphology import related as _token_related
+from app.services.morphology import (
+    extends_query as _extends_query,
+    related as _token_related,
+)
 from app.services.search_utils import make_trigrams
 from app.services.textnorm import clean_text, normalize_text
 
@@ -309,8 +312,16 @@ def save_index(index_path: Path, docs: List[Dict[str, Any]]) -> None:
 def load_index(index_path: Path) -> Dict[str, Any]:
     if not index_path.exists():
         return {"generated_at": None, "count": 0, "files": []}
-    with open(index_path, "r", encoding="utf8") as fh:
-        return json.load(fh)
+    try:
+        with open(index_path, "r", encoding="utf8") as fh:
+            data = json.load(fh)
+    except Exception as exc:
+        print(f"Warning: could not read index {index_path}: {exc}")
+        return {"generated_at": None, "count": 0, "files": []}
+    if not isinstance(data, dict) or not isinstance(data.get("files"), list):
+        print(f"Warning: {index_path} is not a valid index file")
+        return {"generated_at": None, "count": 0, "files": []}
+    return data
 
 
 def scan_directory(
@@ -373,32 +384,47 @@ def search_index(
     index_path: Path, query: str, page: int = 1, per_page: int = 10
 ) -> Dict[str, Any]:
     idx = load_index(index_path)
-    docs = idx.get("files", [])
+    docs = [d for d in (idx.get("files") or []) if isinstance(d, dict)]
     tokens = tokenize_query(query)
     if not tokens:
         return {"results": [], "total": 0}
 
     results: List[Dict[str, Any]] = []
     qlower = query.lower()
-    for doc in docs:
-        score = 0.0
-        doc_titles = [t.lower() for t in doc.get("title_tokens", [])]
-        matched = sum(
-            1 for t in tokens if any(_token_related(t, d) for d in doc_titles)
+
+    def _titles(doc: Dict[str, Any]) -> List[str]:
+        return [str(t).lower() for t in (doc.get("title_tokens") or []) if t]
+
+    def _family_hits(doc_titles: List[str]) -> int:
+        # exact / same-word-form first, then the whole word family: "read"
+        # also finds "reading"/"reader"/"readme"
+        return sum(
+            1
+            for t in tokens
+            if any(_token_related(t, d) or _extends_query(t, d) for d in doc_titles)
         )
-        score += matched * 10
-        for qt in doc.get("quality_tokens", []):
-            if qt and any(qt == t.lower() for t in tokens):
-                score += 6
-        for cd in doc.get("codec_tokens", []):
-            if cd and any(cd == t.lower() for t in tokens):
-                score += 5
-        if doc.get("year") and any(str(doc.get("year")) == t for t in tokens):
-            score += 8
-        if qlower and qlower in doc.get("filename", "").lower():
-            score += 3
-        fname_len = len(doc.get("filename", ""))
-        score -= fname_len / 200.0
+
+    for doc in docs:
+        try:
+            matched = _family_hits(_titles(doc))
+            score = float(matched) * 10.0
+            for qt in doc.get("quality_tokens") or []:
+                if qt and any(str(qt).lower() == t.lower() for t in tokens):
+                    score += 6
+            for cd in doc.get("codec_tokens") or []:
+                if cd and any(str(cd).lower() == t.lower() for t in tokens):
+                    score += 5
+            if doc.get("year") and any(str(doc.get("year")) == t for t in tokens):
+                score += 8
+            fname = str(doc.get("filename") or "")
+            # filename bonus only for docs that matched a token, so an
+            # unrelated filename substring cannot score on its own
+            if matched and qlower and qlower in fname.lower():
+                score += 3
+            score -= len(fname) / 200.0
+        except Exception:
+            # one malformed entry must not abort the whole search
+            continue
         if score > 0:
             doc["_score"] = score
             results.append(doc)
@@ -406,26 +432,23 @@ def search_index(
     # fallback: prefix/filename match
     if not results:
         for doc in docs:
-            score = 0.0
-            doc_titles = [t.lower() for t in doc.get("title_tokens", [])]
-            matched = sum(
-                1
-                for t in tokens
-                if any(
-                    tt.startswith(t.lower()) or _token_related(t, tt)
-                    for tt in doc_titles
-                )
-            )
-            score += matched * 8
-            if qlower and qlower in doc.get("filename", "").lower():
-                score += 2
-            fname_len = len(doc.get("filename", ""))
-            score -= fname_len / 300.0
+            try:
+                matched = _family_hits(_titles(doc))
+                score = float(matched) * 8.0
+                fname = str(doc.get("filename") or "")
+                if matched and qlower and qlower in fname.lower():
+                    score += 2
+                score -= len(fname) / 300.0
+            except Exception:
+                continue
             if score > 0:
                 doc["_score"] = score
                 results.append(doc)
 
-    results.sort(key=lambda r: (r.get("_score", 0), r.get("mtime", 0)), reverse=True)
+    results.sort(
+        key=lambda r: (r.get("_score") or 0.0, r.get("mtime") or 0),
+        reverse=True,
+    )
 
     # collapse duplicates by the same key the bot dedupes on, keeping the
     # best-scoring copy (list is already sorted, so the first one wins)

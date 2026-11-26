@@ -41,22 +41,22 @@ coll = db.get_collection("telegraph_pages")
 
 queries = [
     (
-        "seduction",
+        "reading",
         {
             "$or": [
-                {"content": {"$regex": "seduction", "$options": "i"}},
-                {"page_header": {"$regex": "seduction", "$options": "i"}},
-                {"query": {"$regex": "seduction", "$options": "i"}},
+                {"content": {"$regex": "reading", "$options": "i"}},
+                {"page_header": {"$regex": "reading", "$options": "i"}},
+                {"query": {"$regex": "reading", "$options": "i"}},
             ]
         },
     ),
     (
-        "seduction skills",
+        "reading skills",
         {
             "$or": [
-                {"content": {"$regex": "seduction skills", "$options": "i"}},
-                {"page_header": {"$regex": "seduction skills", "$options": "i"}},
-                {"query": {"$regex": "seduction skills", "$options": "i"}},
+                {"content": {"$regex": "reading skills", "$options": "i"}},
+                {"page_header": {"$regex": "reading skills", "$options": "i"}},
+                {"query": {"$regex": "reading skills", "$options": "i"}},
             ]
         },
     ),
@@ -146,7 +146,7 @@ for qname, q in queries:
 
 if not found_any:
     print(
-        "No matching telegraph_pages found for any query (searched: seduction, seduction skills, pdfcoffee, algebra)"
+        "No matching telegraph_pages found for any query (searched: reading, reading skills, pdfcoffee, algebra)"
     )
 
 # Check files collection for a few sample message ids mentioned in your snippet

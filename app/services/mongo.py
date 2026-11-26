@@ -5,6 +5,7 @@ import certifi
 from pymongo.errors import PyMongoError
 from datetime import datetime
 from app.utils.logger import logger
+from app.services.morphology import prefix_patterns
 
 
 class MongoService:
@@ -113,6 +114,14 @@ class MongoService:
                 {"quality_tokens": {"$in": tokens}},
                 {"codec_tokens": {"$in": tokens}},
             ]
+            + [
+                {"title_tokens": {"$elemMatch": {"$regex": pattern, "$options": "i"}}}
+                for pattern in prefix_patterns(tokens)
+            ]
+            + [
+                {"filename": {"$regex": pattern, "$options": "i"}}
+                for pattern in prefix_patterns(tokens, boundary=True)
+            ]
         }
         text_query = {"$text": {"$search": query}}
         final_query = {"$or": [token_query, text_query]}
@@ -156,6 +165,14 @@ class MongoService:
             "$or": [
                 {"title_tokens": {"$in": tokens}},
                 {"$text": {"$search": query}},
+            ]
+            + [
+                {"title_tokens": {"$elemMatch": {"$regex": pattern, "$options": "i"}}}
+                for pattern in prefix_patterns(tokens)
+            ]
+            + [
+                {"filename": {"$regex": pattern, "$options": "i"}}
+                for pattern in prefix_patterns(tokens, boundary=True)
             ]
         }
         projection = {"_id": 0, "filename": 1, "chat_id": 1, "message_id": 1}

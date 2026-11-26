@@ -8,7 +8,7 @@ from typing import Any, Optional
 from app.config.settings import settings
 
 # Search semantics changes must bypass persisted results from earlier versions.
-_CACHE_KEY_VERSION = "search-normalization-v2"
+_CACHE_KEY_VERSION = "search-family-v10"
 
 
 class AsyncSearchCache:

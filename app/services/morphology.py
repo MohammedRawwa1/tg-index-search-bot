@@ -187,6 +187,169 @@ def matched_tokens(query_tokens: Iterable[str], doc_tokens: Iterable[str]) -> Se
     return {q for q in queries if q in docs or fold(q) in doc_forms}
 
 
+# Shortest stem the family rule will expand from. Below this, stemming would
+# reduce a whole query to a three-letter fragment ("typing" -> "typ") and
+# invite unrelated words, so those queries keep their literal spelling.
+_MIN_FAMILY_ROOT = 4
+
+# Derivational tails that split one word family into stems the inflection
+# folder cannot reconcile: "produc-tion" vs "produce", "creat-ive" vs
+# "creat-ion", "inform-ative" vs "inform-ation". Stripping them gives both
+# sides the stem they share. The tail is only removed when at least five
+# characters remain, so short roots keep their spelling.
+_FAMILY_TAILS = ("iveness", "fulness", "ousness", "iv", "ic", "al", "ous", "ful")
+
+
+def _family_extension(shorter: str, longer: str) -> bool:
+    """True when `longer` opens with `shorter` (read -> reading, reader)."""
+    return len(longer) > len(shorter) and longer.startswith(shorter)
+
+
+def family_stem(token: str) -> str:
+    """Derivational stem shared by members of one word family.
+
+    `fold` reconciles inflections (create/creating/created) but not the
+    derivational pairs English forms with a different tail
+    (produce/production, create/creative, inform/information). This strips one
+    such tail so both sides compare equal, for any word rather than a list of
+    exception words.
+    """
+    raw = str(token or "").strip().lower()
+    word = fold(raw)
+    # -tion words are built as base + tion (produc + tion) while their verb is
+    # spelled base + e (produce). Dropping the whole tail gives the shared base.
+    # "action"/"fiction" are base + ion, so a base shorter than four letters
+    # keeps the folded form instead of shrinking to "ac"/"fic".
+    if len(raw) >= 8 and raw.endswith(("tion", "sion")):
+        base = raw[:-4]
+        if len(base) >= 4:
+            return fold(base)
+    if len(word) < 6:
+        return word
+    for tail in _FAMILY_TAILS:
+        if word.endswith(tail) and len(word) - len(tail) >= 5:
+            word = word[: -len(tail)]
+            break
+    # The -ct- / -c- alternation: productive/production vs produce,
+    # attractive vs attraction. Dropping the t gives every member of that
+    # family the same base.
+    if word.endswith("ct") and len(word) >= 6:
+        return word[:-1]
+    return word
+
+
+def family_root(token: str) -> str:
+    """Spelling the family expansion starts from for `token`.
+
+    The literal token is used unless folding strips an inflection and leaves
+    a stem long enough to be a word root: "reading" -> "read" (so searching
+    any member of that family reaches the whole family, not only longer
+    spellings of "reading"), while "read" and "reader" stay themselves and
+    "typing" keeps its spelling because its stem "typ" is too short to expand
+    safely.
+    """
+    word = str(token or "").strip().lower()
+    if len(word) < _MIN_FAMILY_ROOT:
+        return word
+    stem = fold(word)
+    if stem and stem != word and len(stem) >= _MIN_FAMILY_ROOT:
+        return stem
+    return word
+
+
+def extends_query(query_token: str, doc_token: str) -> bool:
+    """True when `doc_token` belongs to the word family of `query_token`.
+
+    Word-agnostic: every typed token is expanded from its own frames, never
+    from a list of known words. The whole family that opens with the query's
+    root is invited in (read -> reading, reader; type -> typing, typist), and
+    a longer member starts from its stem so "reading" reaches "read" and
+    "readme" instead of only longer "reading" spellings.
+
+    The second rule joins the derivational stems that the inflection folder
+    cannot reconcile: "production" reaches "produce"/"producing" (shared stem
+    "produc"), "creative" reaches "create"/"creation" (shared stem "creat"),
+    "informative" reaches "information". That comparison only applies once the
+    shared stem is at least five characters long, so it never collapses a long
+    query onto a short root: "reading" still does not match every "read" file.
+
+    Case never matters because both sides are lowercased here. Grammatical
+    variants that fold to the same spelling are handled by :func:`fold` and
+    are not repeated here.
+    """
+    query = str(query_token or "").strip().lower()
+    doc = str(doc_token or "").strip().lower()
+    if len(query) < 3 or len(doc) < 3:
+        return False
+    if query == doc or fold(query) == fold(doc):
+        return False
+    if _family_extension(family_root(query), doc):
+        return True
+    query_stem = family_stem(query)
+    doc_stem = family_stem(doc)
+    if not query_stem or not doc_stem:
+        return False
+    if query_stem == doc_stem:
+        return True
+    shorter, longer = (
+        (query_stem, doc_stem)
+        if len(query_stem) <= len(doc_stem)
+        else (doc_stem, query_stem)
+    )
+    return len(shorter) >= 5 and longer.startswith(shorter)
+
+
+def family_prefix_terms(tokens: Iterable[str]) -> List[str]:
+    """Unique spellings to expand a family from: each typed token, its root
+    and its derivational stem.
+
+    Tokens are lowercased, de-duplicated and kept in order. For "reading"
+    this yields ["reading", "read"]; for "production" it yields
+    ["production", "product", "produc"], so the typed form, its root and the
+    wider stem family are all retrieved - for any word.
+    """
+    terms: List[str] = []
+    seen = set()
+    for token in tokens or []:
+        word = str(token or "").strip().lower()
+        if not word:
+            continue
+        for form in (word, family_root(word), family_stem(word)):
+            if form and form not in seen:
+                seen.add(form)
+                terms.append(form)
+    return terms
+
+
+def prefix_patterns(tokens: Iterable[str], boundary: bool = False) -> List[str]:
+    """Start-anchored regexes retrieving every word-family extension of `tokens`.
+
+    For "read" this yields `^read`, which retrieves the whole family - "read",
+    "reads", "reading", "reader", "readme", ... and, through the boundary
+    form, "my_reading_list" inside a filename. A longer member query also
+    emits its stem ("reading" -> `^read`) so the rest of its family is
+    retrieved, but never the shorter root itself: "reading" must not retrieve
+    every "read" file, so no reversed or reconstructed-root pattern is added.
+    Patterns stay anchored at the start so the `title_tokens` index remains
+    usable. With `boundary=True` the patterns match inside a filename
+    ("Reading.pdf") instead of a whole token array element.
+    """
+    lead = r"(?:^|[^0-9a-z])" if boundary else "^"
+    patterns: List[str] = []
+    for token in family_prefix_terms(tokens):
+        if len(token) < 3:
+            continue
+        patterns.append(lead + re.escape(token))
+
+    seen = set()
+    unique: List[str] = []
+    for pattern in patterns:
+        if pattern not in seen:
+            seen.add(pattern)
+            unique.append(pattern)
+    return unique
+
+
 def variant_patterns(tokens: Iterable[str]) -> List[str]:
     """Anchored regexes for exact tokens and recognized word-form variants."""
     patterns: List[str] = []

@@ -6,8 +6,8 @@ Implements the tiered search pipeline recommended for the file index:
     Tier 1  phrase  all query tokens as a contiguous phrase             +90
     Tier 2  all     every query token present in title tokens           +80
     Tier 3  most    >= MOST_TOKENS_RATIO of query tokens present        +60
-    Tier 4  prefix  a query token is a prefix of a title token          +40
-    Tier 5  typo    trigram similarity >= TRIGRAM_MIN_SIM (1 edit)      +20
+    Tier 4  prefix  full multi-token query prefixes a filename          +40
+    Tier 5  typo    trigram gate plus one-edit token match               +20
     Tier 6  broad   conservative last resort (regex) — opt-in only       +5
 
 A higher tier ALWAYS outranks a lower tier (precision first, recall last).
@@ -27,12 +27,17 @@ be tuned remotely without code changes:
     SEARCH_QUALITY_LOG      set "0"/"false" to disable per-query quality logging
 """
 
+import math
 import os
 import re
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from app.services.morphology import fold as _fold, matched_tokens as _matched_tokens
+from app.services.morphology import (
+    extends_query as _extends_query,
+    fold as _fold,
+    matched_tokens as _matched_tokens,
+)
 from app.services.search_utils import make_trigrams, trigram_similarity, TRIGRAM_MAX
 from app.services.textnorm import normalize_text as _normalize_text
 from app.services.tokenizer import tokenize_filename
@@ -139,6 +144,32 @@ def is_contiguous_phrase(q_tokens: Sequence[str], doc_tokens: Sequence[str]) -> 
     return False
 
 
+def _one_edit_apart(left: str, right: str) -> bool:
+    if min(len(left), len(right)) < 4 or abs(len(left) - len(right)) > 1:
+        return False
+    if left == right:
+        return False
+
+    i = j = edits = 0
+    while i < len(left) and j < len(right):
+        if left[i] == right[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(left) > len(right):
+            i += 1
+        elif len(right) > len(left):
+            j += 1
+        else:
+            i += 1
+            j += 1
+    edits += (len(left) - i) + (len(right) - j)
+    return edits == 1
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
@@ -223,8 +254,31 @@ def classify_match(
 
     # exact tokens first, then the same word in another grammatical form, so
     # "create" also matches "created", "creating", "creates" and "creation"
-    matched = len(_matched_tokens(q_set, title_set | aux_set))
+    doc_token_set = title_set | aux_set
+    exact_matched = _matched_tokens(q_set, doc_token_set)
+
+    # word-family prefixes: the whole family that opens with the query's root
+    # is invited in, so "read" reaches "reading"/"reader"/"readme" (and
+    # "my_reading_list", whose tokenizer split makes "reading" a token of its
+    # own). Searching a longer member expands from its stem too ("reading" ->
+    # "read" family), so it finds "readme" while still never collapsing onto
+    # every "read" entry.
+    # Only tokens with no exact form are considered. Family matches count as
+    # matches, so the whole merged family sits in the same tier as the literal
+    # hits instead of being dropped or pushed past the last page of results.
+    family_matched = {
+        q
+        for q in q_set - exact_matched
+        if any(_extends_query(q, d) for d in doc_token_set)
+    }
+    matched = len(exact_matched) + len(family_matched)
     coverage = matched / float(len(q_set)) if q_set else 0.0
+    # remembered for the caller: word-family hits can be lifted into the first
+    # page even though a big library orders the literal hits ahead of them.
+    try:
+        doc["_family"] = len(family_matched)
+    except Exception:
+        pass
 
     # --- exact: normalized filename / title equals (or is a full prefix of)
     #     the normalized query. The prefix form handles indexed filenames that
@@ -268,32 +322,22 @@ def classify_match(
         return MatchInfo("all", 1.0, matched)
 
     # --- most tokens present ---
-    if matched >= 1 and coverage >= MOST_TOKENS_RATIO:
+    # A multi-word query must match at least two words. With two tokens a
+    # half-ratio "most" accepted a single-token hit, so "read speed" returned
+    # every book containing "read".
+    min_most = 1
+    if len(q_set) >= 2:
+        min_most = max(2, math.ceil(len(q_set) * MOST_TOKENS_RATIO))
+    if matched >= min_most and coverage >= MOST_TOKENS_RATIO:
         return MatchInfo("most", coverage, matched)
 
-    # --- prefix: token is a prefix of a title token (or vice versa), or
-    #     the filename starts with the full normalized query ---
-    prefix_hit = False
-    for qt in q_set:
-        qt_form = _fold(qt)
-        for dt in doc_titles:
-            dt_form = _fold(dt)
-            if (
-                dt.startswith(qt)
-                or qt.startswith(dt)
-                or dt_form.startswith(qt_form)
-                or qt_form.startswith(dt_form)
-            ):
-                prefix_hit = True
-                break
-        if prefix_hit:
-            break
-    if not prefix_hit and q_norm and fname_norm.startswith(q_norm):
-        prefix_hit = True
-    if prefix_hit:
+    # A full multi-token filename prefix is useful; individual token prefixes
+    # are not word-form matches ("read" must not normalize to "reading").
+    if len(q_tokens) > 1 and q_norm and fname_norm.startswith(q_norm):
         return MatchInfo("prefix", coverage, matched, {"prefix": True})
 
-    # --- typo: trigram similarity gate (1-edit tolerance) ---
+    # --- typo: trigram retrieval plus a one-edit token check ---
+    # Multi-word queries must still match their words (see the guard below).
     if q_tris is None:
         try:
             q_tris = make_trigrams(query or " ".join(q_tokens), TRIGRAM_MAX)
@@ -303,8 +347,20 @@ def classify_match(
         sim = trigram_similarity(q_tris, doc.get("trigrams") or [])
     except Exception:
         sim = 0.0
-    if sim >= TRIGRAM_MIN_SIM:
-        return MatchInfo("typo", coverage, matched, {"trigram_sim": sim})
+    has_one_edit_token = any(
+        _one_edit_apart(query_token, doc_token)
+        for query_token in q_set
+        for doc_token in title_set | aux_set
+    )
+    if sim >= TRIGRAM_MIN_SIM and has_one_edit_token:
+        # A multi-word query only accepts a typo document that already matches
+        # the minimum number of its words. Without this, "typing tips"
+        # returned every "Setting Up"/"Writing Tips" video and "ready tying"
+        # returned only noise: "setting", "writing" and "typing" are each one
+        # edit apart, so a single near-miss was enough to qualify. Single-word
+        # queries keep the pure typo tier ("instelar" still finds the film).
+        if len(q_set) < 2 or matched >= min_most:
+            return MatchInfo("typo", coverage, matched, {"trigram_sim": sim})
 
     # --- broad: only reachable when explicitly requested ---
     if allow_broad:
@@ -402,6 +458,96 @@ def compute_search_score(
         pass
 
     return score + max(0.0, min(fine, FINE_SCORE_CAP))
+
+
+# ---------------------------------------------------------------------------
+# Word-family visibility
+# ---------------------------------------------------------------------------
+
+# A family hit ("read" -> "reading") is an equal match, but in a big library
+# it is usually older than the literal hits, so it would sit on the last page.
+# Lift whole family forms near the top (after a short run of literal matches).
+# The budget is counted in documents, and forms are promoted from the rarest
+# up: a form only enters when all of its hits fit, so a dominant stem
+# ("reader" under "read") cannot consume the slots before "reading" does.
+# SEARCH_FAMILY_SLOTS / SEARCH_FAMILY_AFTER tune the budget and the
+# literal-run length.
+FAMILY_PROMOTION_SLOTS = _env_int("SEARCH_FAMILY_SLOTS", 40)
+FAMILY_PROMOTION_AFTER = _env_int("SEARCH_FAMILY_AFTER", 10)
+
+
+def _family_forms(q_tokens: Iterable[str], doc: Dict[str, Any]) -> Tuple[str, ...]:
+    """Family-form tokens the document carries for these query tokens.
+
+    This intentionally does not exclude tokens the query matched exactly: a
+    title like "Reading ... Read ..." belongs to the rare "reading" form even
+    though "read" itself is a literal match.
+    """
+    q_set = {str(t).lower() for t in q_tokens if t}
+    if not q_set:
+        return ()
+    doc_tokens = set(_doc_title_tokens(doc))
+    doc_tokens |= {str(t).lower() for t in (doc.get("quality_tokens") or [])}
+    doc_tokens |= {str(t).lower() for t in (doc.get("codec_tokens") or [])}
+    return tuple(sorted({d for q in q_set for d in doc_tokens if _extends_query(q, d)}))
+
+
+def promote_family_matches(
+    results: List[Dict[str, Any]],
+    tokens: Optional[Sequence[str]] = None,
+    slots: Optional[int] = None,
+    after: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Lift word-family hits near the top of an already-sorted list.
+
+    Once a rare form is promoted, all of its hits travel together, so a
+    search for "read" shows "reading" (and its duplicate copies) on the first
+    page instead of on the last one. Forms too large to fit what is left of
+    the budget keep their natural order. Everything else keeps its relative
+    order, so pagination stays consistent across pages.
+    """
+    if not results:
+        return results
+    try:
+        slots = FAMILY_PROMOTION_SLOTS if slots is None else int(slots)
+        after = FAMILY_PROMOTION_AFTER if after is None else int(after)
+    except Exception:
+        return results
+    if slots <= 0:
+        return results
+
+    family = [d for d in results if d.get("_family")]
+    promoted: List[Dict[str, Any]] = []
+    if tokens:
+        form_docs: Dict[str, List[Dict[str, Any]]] = {}
+        for doc in results:
+            try:
+                forms = _family_forms(tokens, doc)
+            except Exception:
+                forms = ()
+            for form in forms:
+                form_docs.setdefault(form, []).append(doc)
+        promoted_ids = set()
+        for _form, docs in sorted(
+            form_docs.items(), key=lambda kv: (len(kv[1]), kv[0])
+        ):
+            new_docs = [d for d in docs if id(d) not in promoted_ids]
+            # Whole forms only: skipping an oversized form keeps a common
+            # stem from crowding out the rare variants behind it.
+            if not new_docs or len(promoted) + len(new_docs) > slots:
+                continue
+            for doc in new_docs:
+                promoted.append(doc)
+                promoted_ids.add(id(doc))
+    if not promoted:
+        promoted = family[:slots]
+
+    if not promoted:
+        return results
+    promoted_ids = {id(d) for d in promoted}
+    rest = [d for d in results if id(d) not in promoted_ids]
+    pos = max(0, min(after, len(rest)))
+    return rest[:pos] + promoted + rest[pos:]
 
 
 # ---------------------------------------------------------------------------

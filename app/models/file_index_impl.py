@@ -3,7 +3,7 @@ from datetime import datetime
 import re
 import os
 import asyncio
-from app.services.morphology import fold, variant_patterns
+from app.services.morphology import fold, prefix_patterns, variant_patterns
 from app.services.search_utils import make_trigrams, TRIGRAM_MAX
 from app.services.textnorm import normalize_text
 from app.services.relevance import (
@@ -14,6 +14,7 @@ from app.services.relevance import (
     classify_match,
     compute_search_score,
     log_search_quality,
+    promote_family_matches,
     resolve_min_tier,
     tier_priority,
 )
@@ -28,7 +29,14 @@ PREFIX_BOOST = 5
 TRIGRAM_WEIGHT = 40
 FILENAME_MATCH = 3
 FNAME_LEN_PENALTY_DIV = 200.0
-CANDIDATE_LIMIT = 800
+# Safety valve for one candidate stage. It sits far above any realistic result
+# set: the old 800-document cap silently dropped matches past the 800th
+# candidate, so the "N results" header described an arbitrary slice of the
+# library instead of the real match count.
+SCAN_LIMIT = 50000
+# The trigram typo fallback is a last resort: scanning every document that
+# shares a trigram with the query would be slow, so it keeps its own cap.
+FUZZY_SCAN_LIMIT = 5000
 
 
 class FileIndex:
@@ -55,11 +63,9 @@ class FileIndex:
         )
         self.RECENCY_WEIGHT = _envf("RANK_RECENCY_WEIGHT", 2.0)
         try:
-            self.CANDIDATE_LIMIT = int(
-                os.getenv("RANK_CANDIDATE_LIMIT", CANDIDATE_LIMIT)
-            )
+            self.SCAN_LIMIT = int(os.getenv("RANK_SCAN_LIMIT", SCAN_LIMIT))
         except Exception:
-            self.CANDIDATE_LIMIT = CANDIDATE_LIMIT
+            self.SCAN_LIMIT = SCAN_LIMIT
 
     def _normalize_filename(self, filename: str) -> str:
         """Return a normalized filename string used for deduplication/search.
@@ -227,12 +233,16 @@ class FileIndex:
     ) -> List[Dict[str, Any]]:
         if not tokens:
             return []
-        # Use title_tokens and return documents that contain any of the tokens
-        cursor = (
-            self._coll.find({"title_tokens": {"$in": tokens}})
-            .sort("timestamp", -1)
-            .limit(limit)
-        )
+        # Any exact token, any word-family prefix ("read" -> "reading"), or the
+        # filename itself, so stale stored tokens don't hide results.
+        or_clauses = [{"title_tokens": {"$in": tokens}}]
+        for pattern in prefix_patterns(tokens):
+            or_clauses.append(
+                {"title_tokens": {"$elemMatch": {"$regex": pattern, "$options": "i"}}}
+            )
+        for pattern in prefix_patterns(tokens, boundary=True):
+            or_clauses.append({"filename": {"$regex": pattern, "$options": "i"}})
+        cursor = self._coll.find({"$or": or_clauses}).sort("timestamp", -1).limit(limit)
         return list(cursor)
 
     def _prefix_fallback(
@@ -245,6 +255,12 @@ class FileIndex:
             or_clauses.append(
                 {"title_tokens": {"$elemMatch": {"$regex": pattern, "$options": "i"}}}
             )
+            or_clauses.append({"filename": {"$regex": pattern, "$options": "i"}})
+        for pattern in prefix_patterns(tokens):
+            or_clauses.append(
+                {"title_tokens": {"$elemMatch": {"$regex": pattern, "$options": "i"}}}
+            )
+        for pattern in prefix_patterns(tokens, boundary=True):
             or_clauses.append({"filename": {"$regex": pattern, "$options": "i"}})
         cursor = self._coll.find({"$or": or_clauses}).limit(limit)
         return list(cursor)
@@ -259,7 +275,37 @@ class FileIndex:
         strict: bool = False,
         allow_broad: bool = False,
     ) -> Dict[str, Any]:
-        """Tiered, precision-first ranked search.
+        """One page of the tiered, precision-first ranked search.
+
+        The ranking is built once by :meth:`rank_all`; `total` is the real
+        number of matches and every page is a slice of that same list, so no
+        page is cut short by a candidate cap.
+        """
+        ranked = self.rank_all(
+            tokens,
+            query=query,
+            filters=filters,
+            strict=strict,
+            allow_broad=allow_broad,
+        )
+        results = ranked.get("results", [])
+        total = int(ranked.get("total", len(results)))
+        try:
+            start = max(0, (int(page) - 1) * int(per_page))
+            end = start + max(0, int(per_page))
+        except Exception:
+            start, end = 0, len(results)
+        return {"results": results[start:end], "total": total}
+
+    def rank_all(
+        self,
+        tokens: List[str],
+        query: str | None = None,
+        filters: Optional[Dict[str, Any]] = None,
+        strict: bool = False,
+        allow_broad: bool = False,
+    ) -> Dict[str, Any]:
+        """Every ranked match, in one pass over the matching candidates.
 
         Candidate stages run in precision order — exact token hits, then
         prefix (autocomplete), then 1-edit trigram tolerance — and the
@@ -267,6 +313,10 @@ class FileIndex:
         than SEARCH_MIN_RESULTS results. The regex/broad fallback is NOT
         part of the normal search path; it is only reachable via
         `allow_broad=True` (scripts/admin use, never the bot handler).
+
+        Candidates are scanned up to SCAN_LIMIT documents (RANK_SCAN_LIMIT),
+        not the old page-sized cap, so `total` and the returned rows describe
+        the same complete set.
         """
         if not tokens:
             return {"results": [], "total": 0}
@@ -328,9 +378,12 @@ class FileIndex:
 
         classified: List[Dict[str, Any]] = []
         seen = set()
+        scanned = 0
 
         def _classify(docs) -> None:
+            nonlocal scanned
             for doc in docs:
+                scanned += 1
                 try:
                     key = (
                         int(doc.get("chat_id") or 0),
@@ -380,13 +433,35 @@ class FileIndex:
                         }
                     }
                 )
+            # Word-family prefixes ("read" -> "reading"/"reader"). The filename
+            # clause keeps retrieval working even when the stored title_tokens
+            # are stale, since ranking derives tokens from the filename. Built
+            # in its own guard so a bad token cannot cost the exact-token stage.
+            try:
+                for pattern in prefix_patterns(tokens):
+                    stage1_clauses.append(
+                        {
+                            "title_tokens": {
+                                "$elemMatch": {"$regex": pattern, "$options": "i"}
+                            }
+                        }
+                    )
+                for pattern in prefix_patterns(tokens, boundary=True):
+                    stage1_clauses.append(
+                        {"filename": {"$regex": pattern, "$options": "i"}}
+                    )
+            except Exception:
+                logger.exception(
+                    "search_with_ranking: prefix candidate clauses failed for {!r}",
+                    tokens,
+                )
             candidate_filter = _with_filters({"$or": stage1_clauses})
-            _classify(self._coll.find(candidate_filter).limit(self.CANDIDATE_LIMIT))
+            _classify(self._coll.find(candidate_filter).limit(self.SCAN_LIMIT))
         except Exception:
             pass
 
-        # Stage 2 — prefix candidates (autocomplete), only when scarce
-        if not strict and _count_at("prefix") < MIN_RESULTS:
+        # Stage 2 — exact filename variants, only when normalized hits are scarce
+        if not strict and _count_at("most") < MIN_RESULTS:
             try:
                 or_clauses = []
                 for pattern in variant_patterns(tokens):
@@ -403,9 +478,24 @@ class FileIndex:
                     or_clauses.append(
                         {"filename": {"$regex": pattern, "$options": "i"}}
                     )
+                for pattern in prefix_patterns(tokens):
+                    or_clauses.append(
+                        {
+                            "title_tokens": {
+                                "$elemMatch": {
+                                    "$regex": pattern,
+                                    "$options": "i",
+                                }
+                            }
+                        }
+                    )
+                for pattern in prefix_patterns(tokens, boundary=True):
+                    or_clauses.append(
+                        {"filename": {"$regex": pattern, "$options": "i"}}
+                    )
                 _classify(
                     self._coll.find(_with_filters({"$or": or_clauses})).limit(
-                        self.CANDIDATE_LIMIT
+                        self.SCAN_LIMIT
                     )
                 )
             except Exception:
@@ -418,7 +508,7 @@ class FileIndex:
                     _classify(
                         self._coll.find(
                             _with_filters({"trigrams": {"$in": q_tris}})
-                        ).limit(self.CANDIDATE_LIMIT)
+                        ).limit(FUZZY_SCAN_LIMIT)
                     )
             except Exception:
                 pass
@@ -484,9 +574,14 @@ class FileIndex:
                 key=lambda r: (r.get("_score", 0.0), r.get("timestamp")), reverse=True
             )
 
+        # Word-family hits ("read" -> "reading") are equal matches but usually
+        # older than the literal ones; lift a few into the first page.
+        try:
+            final_results = promote_family_matches(final_results, tokens)
+        except Exception:
+            pass
+
         total = len(final_results)
-        start = (page - 1) * per_page
-        end = start + per_page
 
         fuzzy_used = min_tier_used == "typo"
         broad_used = min_tier_used == "broad" or allow_broad
@@ -500,7 +595,15 @@ class FileIndex:
             broad_used=broad_used,
         )
 
-        return {"results": final_results[start:end], "total": total}
+        if scanned >= self.SCAN_LIMIT:
+            logger.warning(
+                "rank_all: candidate scan hit RANK_SCAN_LIMIT={} for query={!r}; "
+                "matches past the scanned candidates are not listed",
+                self.SCAN_LIMIT,
+                q_text,
+            )
+
+        return {"results": final_results, "total": total}
 
     def bulk_upsert_files(self, docs: List[Dict[str, Any]]):
         """Perform bulk upsert of multiple file documents.
